@@ -4,7 +4,7 @@
  * around at the edges (and exported images tile seamlessly).
  */
 
-import { MAX_STOPS } from '../../palettes';
+import { HASH_GLSL, RAMP_GLSL } from '../gl';
 
 const HEADER = /* glsl */ `#version 300 es
 precision highp float;
@@ -45,13 +45,7 @@ void main() {
   outColor = vec4(clamp(next, 0.0, 1.0), 0.0, 1.0);
 }`;
 
-/** Integer hash → [0, 1). Deterministic on every GPU, unlike sin()-based noise. */
-const HASH = /* glsl */ `
-float hash(vec2 p, uint salt) {
-  uvec2 q = uvec2(ivec2(floor(p)) + 65536) * uvec2(1597334673u, 3812015801u);
-  uint n = (q.x ^ q.y ^ (salt * 2654435761u)) * 1597334673u;
-  return float(n >> 8) / 16777216.0;
-}`;
+const HASH = HASH_GLSL;
 
 /** Paint a soft-edged stroke of B along the segment uSeg (in grid cells). */
 export const BRUSH_FS = HEADER + HASH + /* glsl */ `
@@ -127,20 +121,9 @@ uniform sampler2D uState;
 uniform vec2 uSize;
 uniform vec2 uResolution;
 uniform vec2 uOffset;
-uniform vec3 uColors[${MAX_STOPS}];
-uniform int uStops;
 uniform float uEmboss;
 out vec4 outColor;
-
-vec3 ramp(float x) {
-  x = clamp(x, 0.0, 1.0) * float(uStops - 1);
-  vec3 c = uColors[0];
-  for (int i = 1; i < ${MAX_STOPS}; i++) {
-    if (i >= uStops) break;
-    c = mix(c, uColors[i], clamp(x - float(i - 1), 0.0, 1.0));
-  }
-  return c;
-}
+${RAMP_GLSL}
 
 void main() {
   vec2 frag = gl_FragCoord.xy + uOffset;

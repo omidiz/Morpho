@@ -18,12 +18,18 @@ npm run build    # type-check and build to dist/
 - `src/patterns/types.ts`: the `Pattern` interface every pattern implements
   (id, name, slider schema, presets, and `create()` → step/render/paint).
 - `src/patterns/turing/`: Turing patterns (Gray-Scott reaction-diffusion) on
-  the GPU with WebGL2 ping-pong float textures.
+  the GPU with WebGL2 ping-pong float textures, and on the CPU (`cpu.ts`)
+  where WebGL2 is missing.
 - `src/patterns/plants/`: L-system plants drawn with Canvas 2D (see below).
 - `src/patterns/phyllotaxis/`: Spirals, sunflower-style seed heads drawn with
   Canvas 2D (see below).
 - `src/patterns/physarum/`: Slime, a slime mold network grown by hundreds of
-  thousands of explorers on the GPU (see below).
+  thousands of explorers on the GPU, or tens of thousands on the CPU
+  (`cpu.ts`) where WebGL2 is missing (see below).
+- `src/patterns/cpu.ts`: what the CPU versions share. Each GPU pattern checks
+  once, on a throwaway canvas, whether WebGL2 and float render targets work
+  (`probeWebGL2` in `gl.ts`), and otherwise runs its CPU version: the same
+  rules on a coarser grid, so the pattern looks the same, a little larger.
 - `src/ui/controls.ts`: builds the panel from a pattern's schema (a slider per
   parameter, with an optional quiet value readout; a switch for on/off ones; a
   row of named choices for ones like shape; nothing for ones only presets set),
@@ -33,7 +39,9 @@ npm run build    # type-check and build to dist/
 - `src/ui/thumbnails.ts`: the switcher's live previews (see below).
 - `src/logic/`: pure, tested logic: seeded RNG, URL state, randomize, undo
   history, share fallback, first-visit flag, sheet snapping, slider ↔ model
-  mappings, frame governor, color
+  mappings, frame and resolution governors, the CPU simulations and shading
+  for browsers without WebGL2 (`grayScottCpu.ts`, `physarumCpu.ts`,
+  `shade.ts`), color
   contrast, export sizing, the L-system, plant species, forest layout and
   growth timing behind the plants, the seed-head layout behind Spirals, and
   the crowd, trail and export sizing behind Slime.
@@ -116,11 +124,14 @@ out of nothing more than that.
   however many explorers there are, so the display needs no retuning
   (`depositPerAgent` in `src/logic/physarum.ts`).
 - **Smooth on phones.** When frames drop, the frame governor thins the crowd
-  (whole rows sit out, down to about 15%), and each remaining explorer leaves
+  (whole rows sit out, down to about 5%), and each remaining explorer leaves
   more trail, so the picture keeps its brightness and shape; past that it
   slows the steps too. The slider and the link don't change. Trails use
   32-bit floats where the device can blend them and 16-bit floats otherwise,
   where the slowest fade is limited so small deposits aren't rounded away.
+  If frames are still slow after a couple of seconds, the canvas itself drops
+  to a lower resolution (2× → 1.5× → 1× device pixels), for any pattern
+  (`ResolutionGovernor` in `src/logic/governor.ts`).
 - **Sliders.** Explorers, Feeler angle, Turn speed and Trail fade. Feeler
   reach and the starting layout (Scatter, or Sprout from the middle) are set
   by the looks only, but live in the link like everything else.

@@ -2,6 +2,7 @@ import './style.css';
 import { uiColors } from './logic/color';
 import { browserStorage, isFirstVisit, markWelcomed } from './logic/firstVisit';
 import { exportFileName, WALLPAPER_SIZES, type WallpaperSize } from './logic/export';
+import { ResolutionGovernor } from './logic/governor';
 import { UndoStack } from './logic/history';
 import { defaultValues, type ParamValues } from './logic/params';
 import { randomizeState } from './logic/randomize';
@@ -16,6 +17,8 @@ import { LiveThumbnails, type ThumbState } from './ui/thumbnails';
 
 /** Device pixels per CSS pixel, capped: beyond 2× the extra pixels cost more than they show. */
 const MAX_PIXEL_RATIO = 2;
+/** A lost WebGL context that hasn't come back by now gets a fresh canvas instead. */
+const RESTORE_WAIT_MS = 3000;
 
 const stage = document.querySelector<HTMLElement>('#stage')!;
 const ui = document.querySelector<HTMLElement>('#ui')!;
@@ -30,10 +33,14 @@ let playing = true;
 let dirty = true;
 let urlTimer = 0;
 let saving = false;
+/** The instance drawing a wallpaper; it outlives a pattern switch until the save is done. */
+let exporting: PatternInstance | null = null;
 /** States from before each Randomize, newest last. */
 const undoStack = new UndoStack<AppState>(20);
 /** Slider values of the patterns visited this session, so switching back finds them as they were. */
 const paramsByPattern = new Map<string, ParamValues>();
+/** Drops the canvas resolution on devices that can't keep up with a pattern. */
+const resolution = new ResolutionGovernor();
 /** Randomizes since the first-visit tip appeared; it bows out after a few. */
 let tipRandomizes = 0;
 const TIP_RANDOMIZES = 3;
@@ -111,7 +118,7 @@ function showPattern(next: Pattern): void {
 }
 
 function mount(): void {
-  instance?.dispose();
+  if (instance !== exporting) instance?.dispose(); // else saveWallpaper lets it go when done
   canvas?.remove();
   instance = null;
   stage.querySelector('.unsupported')?.remove();
@@ -119,13 +126,18 @@ function mount(): void {
   const c = document.createElement('canvas');
   canvas = c;
   stage.append(c);
+  resolution.reset(); // every pattern gets a go at full sharpness
   c.addEventListener('webglcontextlost', (e) => {
     if (c !== canvas) return; // the canvas we just disposed
     e.preventDefault(); // allow restoring
     instance = null;
+    // Some browsers never restore (or not for a long while): start over on a new canvas.
+    window.setTimeout(() => {
+      if (c === canvas && !instance) mount();
+    }, RESTORE_WAIT_MS);
   });
   c.addEventListener('webglcontextrestored', () => {
-    if (c === canvas) mount();
+    if (c === canvas && !instance) mount();
   });
   attachPainting(c);
 
@@ -146,9 +158,14 @@ function mount(): void {
   sizeCanvas();
 }
 
+/** Device pixels per CSS pixel for the canvas now. */
+function pixelRatio(): number {
+  return Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO, resolution.cap);
+}
+
 function sizeCanvas(): void {
   if (!canvas || !instance) return;
-  const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
+  const ratio = pixelRatio();
   const width = Math.max(1, Math.round(stage.clientWidth * ratio));
   const height = Math.max(1, Math.round(stage.clientHeight * ratio));
   if (canvas.width !== width || canvas.height !== height) {
@@ -169,7 +186,8 @@ const FADE_MS = 650;
  */
 function crossfade(): void {
   if (!canvas || !instance) return;
-  stage.querySelector('.fade')?.remove();
+  const old = stage.querySelector<HTMLCanvasElement>('.fade');
+  if (old) release(old);
   const still = document.createElement('canvas');
   still.className = 'fade';
   still.width = canvas.width;
@@ -178,7 +196,18 @@ function crossfade(): void {
   instance.render();
   still.getContext('2d')?.drawImage(canvas, 0, 0);
   stage.append(still);
+  if (fading) release(fading.still); // a fade that never got going
   fading = { still, frames: 0 };
+}
+
+/**
+ * Take a canvas out of the page and free its pixels now. Safari counts
+ * canvas memory until garbage collection and refuses new canvases past a
+ * limit, so stills and exports must not wait for it.
+ */
+function release(c: HTMLCanvasElement): void {
+  c.remove();
+  c.width = c.height = 0;
 }
 
 /** A still waiting to fade, and frames drawn since. */
@@ -204,8 +233,8 @@ function advanceFade(): void {
       { duration: reducedMotion.matches ? FADE_MS / 2 : FADE_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
     )
     .finished.then(
-      () => still.remove(),
-      () => still.remove(),
+      () => release(still),
+      () => release(still),
     );
 }
 
@@ -224,6 +253,10 @@ function frame(time: number): void {
   if (playing) {
     instance.step(dt);
     dirty = true;
+    // Only frames that animate say anything about the device; a save keeps the GPU busy on purpose.
+    if (!saving && resolution.update(dt, pixelRatio())) {
+      sizeCanvas();
+    }
   }
   if (dirty) {
     instance.render();
@@ -237,14 +270,16 @@ function frame(time: number): void {
 async function saveWallpaper(size: WallpaperSize): Promise<void> {
   if (!instance || saving) return;
   saving = true;
+  const source = (exporting = instance);
   const name = exportFileName(pattern.id, state.seed);
   controls.setSaveStatus(size, { state: 'working', progress: 0 });
   let ok = false;
   try {
-    const image = await instance.renderImage(size.width, size.height, {
+    const image = await source.renderImage(size.width, size.height, {
       onProgress: (progress) => controls.setSaveStatus(size, { state: 'working', progress }),
     });
     const blob = await new Promise<Blob | null>((resolve) => image.toBlob(resolve, 'image/png'));
+    image.width = image.height = 0; // free the full-size pixels now (see release)
     if (!blob) throw new Error('Could not encode the image');
     download(blob, name);
     ok = true;
@@ -252,6 +287,8 @@ async function saveWallpaper(size: WallpaperSize): Promise<void> {
     console.error(err);
   } finally {
     saving = false;
+    exporting = null;
+    if (source !== instance) source.dispose(); // switched away while it worked
   }
   controls.setSaveStatus(size, { state: ok ? 'done' : 'failed' });
   window.setTimeout(() => controls.setSaveStatus(size, null), ok ? 2000 : 4000);
@@ -393,7 +430,7 @@ function applyPaletteToPage(p: Palette): void {
 function showUnsupported(): void {
   const note = document.createElement('p');
   note.className = 'unsupported';
-  note.textContent = `${pattern.name} needs a browser with WebGL2. Try the latest Chrome, Safari, Firefox or Edge, or pick another pattern.`;
+  note.textContent = `${pattern.name} can’t run in this browser. Try the latest Chrome, Safari, Firefox or Edge, or pick another pattern.`;
   stage.append(note);
 }
 

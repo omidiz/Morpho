@@ -121,6 +121,114 @@ body {
   background: color-mix(in srgb, var(--ink) 14%, transparent);
 }
 
+/* --- Dock: undo, randomize, share --------------------------------------- */
+
+.dock {
+  --lift: 0px;
+  position: fixed;
+  left: var(--pad);
+  right: var(--pad);
+  bottom: max(14px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  transform: translateY(calc(-1 * var(--lift)));
+  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Wide screens: the panel sits at the left, so the dock goes bottom right. */
+@media (min-width: 720px) {
+  .dock {
+    left: auto;
+    align-items: flex-end;
+    transform: none;
+  }
+}
+
+.dock-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 999px;
+  background: var(--glass);
+  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
+  pointer-events: auto;
+}
+
+.dock-btn {
+  width: 50px;
+  height: 50px;
+}
+
+.dock-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+
+.randomize {
+  --spin: 0deg;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 26px 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    transform 0.15s,
+    filter 0.15s;
+}
+
+.randomize svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+  transform: rotate(var(--spin));
+  transition: transform 0.45s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+
+.randomize:hover {
+  filter: brightness(1.06);
+}
+
+.randomize:active {
+  transform: scale(0.96);
+}
+
+.toast {
+  margin: 0 0 10px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+
+.toast:empty {
+  display: none;
+}
+
+.toast.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
 /* --- Panel ------------------------------------------------------------- */
 
 .panel {
@@ -441,7 +549,11 @@ input[type='range']:focus-visible {
   .size-option::before,
   .hint,
   .chip,
-  .icon-btn {
+  .icon-btn,
+  .dock,
+  .randomize,
+  .randomize svg,
+  .toast {
     transition: none;
   }
 }

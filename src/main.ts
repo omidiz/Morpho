@@ -1,7 +1,10 @@
 import './style.css';
 import { chromeColors } from './logic/color';
 import { exportFileName, WALLPAPER_SIZES, type WallpaperSize } from './logic/export';
+import { UndoStack } from './logic/history';
+import { randomizeState } from './logic/randomize';
 import { hashSeed, makeSeed } from './logic/rng';
+import { shareLink, type ShareEnv } from './logic/share';
 import { decodeState, encodeState, type AppState } from './logic/urlState';
 import { findPalette, PALETTES, type Palette } from './palettes';
 import { findPattern, PATTERNS } from './patterns';
@@ -24,6 +27,8 @@ let playing = true;
 let dirty = true;
 let urlTimer = 0;
 let saving = false;
+/** States from before each Randomize, newest last. */
+const undoStack = new UndoStack<AppState>(20);
 
 applyPaletteToPage(palette);
 
@@ -58,6 +63,9 @@ const controls = buildControls(
     onSave: saveWallpaper,
     onTogglePlay: togglePlay,
     onRestart: restart,
+    onRandomize: randomize,
+    onUndo: undo,
+    onShare: share,
   },
 );
 
@@ -171,6 +179,59 @@ function restart(): void {
   saveUrl();
 }
 
+/** Jump to a fresh random look: new seed, preset-like params, another palette. */
+function randomize(): void {
+  undoStack.push(snapshot());
+  applyState(randomizeState(state, pattern, PALETTES, makeSeed()));
+  controls.setCanUndo(true);
+  controls.spinDice();
+}
+
+/** Go back to how things were before the last Randomize. */
+function undo(): void {
+  const previous = undoStack.pop();
+  if (!previous) return;
+  applyState(previous);
+  controls.setCanUndo(undoStack.size > 0);
+}
+
+function snapshot(): AppState {
+  return { ...state, params: { ...state.params } };
+}
+
+/** Show `next` (same pattern): new params, palette and seed, regrown from the start. */
+function applyState(next: AppState): void {
+  state.seed = next.seed;
+  state.params = { ...next.params };
+  palette = findPalette(next.palette);
+  state.palette = palette.id;
+  instance?.setParams(state.params);
+  instance?.setPalette(palette);
+  instance?.reset(hashSeed(state.seed));
+  controls.setValues(state.params);
+  controls.setPalette(palette);
+  applyPaletteToPage(palette);
+  if (!playing) togglePlay(); // a fresh start is only seeds until it grows
+  dirty = true;
+  saveUrl();
+}
+
+/** Share sheet on phones, copy the link elsewhere. Runs inside the click, as browsers require. */
+async function share(): Promise<void> {
+  const url = location.origin + location.pathname + encodeState(state, pattern);
+  const result = await shareLink(url, 'Morpho', shareEnv());
+  if (result === 'copied') controls.toast('Link copied');
+  else if (result === 'failed') window.prompt('Copy this link to share the pattern:', url);
+}
+
+function shareEnv(): ShareEnv {
+  return {
+    share: navigator.share ? (data) => navigator.share(data) : undefined,
+    copy: navigator.clipboard ? (text) => navigator.clipboard.writeText(text) : undefined,
+    preferNativeShare: matchMedia('(hover: none) and (pointer: coarse)').matches,
+  };
+}
+
 function attachPainting(c: HTMLCanvasElement): void {
   const strokes = new Map<number, Point>();
   const toPoint = (e: PointerEvent): Point => {
@@ -225,11 +286,26 @@ function showUnsupported(): void {
 
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement;
-  if (e.metaKey || e.ctrlKey || e.altKey || target.closest('input, button, select, textarea')) return;
-  if (e.key === ' ') {
+  // Leave typing alone. Sliders have no use for these keys, so they still work there.
+  if (target.closest('input:not([type="range"]), select, textarea, [contenteditable]')) return;
+  const key = e.key.toLowerCase();
+  if (key === 'z' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
     e.preventDefault();
+    undo();
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // A button reached with the keyboard keeps its own Space; one that was just clicked doesn't.
+  if (key === ' ' && target.closest('button') && target.matches(':focus-visible')) return;
+  if (key === ' ') {
+    e.preventDefault();
+    if (e.repeat) return; // holding Space shouldn't flood the undo history
+    randomize();
+  } else if (key === 'z') {
+    undo();
+  } else if (key === 'p') {
     togglePlay();
-  } else if (e.key === 'r' || e.key === 'R') {
+  } else if (key === 'r') {
     restart();
   }
 });

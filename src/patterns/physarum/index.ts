@@ -151,6 +151,8 @@ export const physarum: Pattern = {
   params: PARAMS,
   presets: PRESETS,
   explore: EXPLORE,
+  // A small crowd: the preview runs beside the real thing.
+  thumbnail: { zoom: 2, params: { agents: 30 } },
   hint: 'Tap to drop food. The network will find its way to it.',
   create: (options) => new PhysarumInstance(options),
 };

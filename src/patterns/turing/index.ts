@@ -85,6 +85,7 @@ export const turing: Pattern = {
   params: PARAMS,
   presets: PRESETS,
   explore: EXPLORE,
+  thumbnail: { zoom: 2.5 },
   hint: 'Touch the pattern to plant new seeds.',
   create: (options) => new TuringInstance(options),
 };

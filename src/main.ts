@@ -1,5 +1,6 @@
 import './style.css';
-import { chromeColors } from './logic/color';
+import { uiColors } from './logic/color';
+import { browserStorage, isFirstVisit, markWelcomed } from './logic/firstVisit';
 import { exportFileName, WALLPAPER_SIZES, type WallpaperSize } from './logic/export';
 import { UndoStack } from './logic/history';
 import { defaultValues, type ParamValues } from './logic/params';
@@ -11,6 +12,7 @@ import { findPalette, PALETTES, type Palette } from './palettes';
 import { findPattern, PATTERNS } from './patterns';
 import { UnsupportedError, type Pattern, type PatternInstance, type Point } from './patterns/types';
 import { buildControls } from './ui/controls';
+import { LiveThumbnails, type ThumbState } from './ui/thumbnails';
 
 /** Device pixels per CSS pixel, capped: beyond 2× the extra pixels cost more than they show. */
 const MAX_PIXEL_RATIO = 2;
@@ -32,6 +34,9 @@ let saving = false;
 const undoStack = new UndoStack<AppState>(20);
 /** Slider values of the patterns visited this session, so switching back finds them as they were. */
 const paramsByPattern = new Map<string, ParamValues>();
+/** Randomizes since the first-visit tip appeared; it bows out after a few. */
+let tipRandomizes = 0;
+const TIP_RANDOMIZES = 3;
 
 applyPaletteToPage(palette);
 
@@ -41,6 +46,7 @@ const controls = buildControls(
   {
     onPattern(next) {
       paramsByPattern.set(pattern.id, { ...state.params });
+      crossfade();
       state.pattern = next.id;
       state.params = paramsByPattern.get(next.id) ?? defaultValues(next.params);
       showPattern(next);
@@ -54,6 +60,7 @@ const controls = buildControls(
       saveUrl();
     },
     onPreset(preset) {
+      crossfade();
       Object.assign(state.params, preset.values);
       instance?.setParams(state.params);
       instance?.reset(hashSeed(state.seed));
@@ -62,6 +69,7 @@ const controls = buildControls(
       saveUrl();
     },
     onPalette(next) {
+      crossfade();
       palette = next;
       state.palette = next.id;
       instance?.setPalette(next);
@@ -76,8 +84,22 @@ const controls = buildControls(
     onRandomize: randomize,
     onUndo: undo,
     onShare: share,
+    onPanel: (open) => thumbs.setVisible(open),
+    onWelcomeDone: () => markWelcomed(browserStorage()),
   },
 );
+
+const thumbs = new LiveThumbnails(PATTERNS, (p) => controls.thumbSlot(p), thumbState());
+
+/** What the switcher's previews should show: this seed and palette, each pattern's own sliders. */
+function thumbState(): ThumbState {
+  return {
+    seed: hashSeed(state.seed),
+    palette,
+    paramsFor: (p) =>
+      p.id === pattern.id ? state.params : (paramsByPattern.get(p.id) ?? defaultValues(p.params)),
+  };
+}
 
 /** Switch the controls and the canvas over to `next`, using the current state. */
 function showPattern(next: Pattern): void {
@@ -137,12 +159,68 @@ function sizeCanvas(): void {
   dirty = true;
 }
 
+/** How long the old picture takes to melt into the new one. */
+const FADE_MS = 650;
+
+/**
+ * Lay a still of the current picture over the canvas and fade it out, so
+ * whatever changes next (a new pattern, a new look) dissolves in rather
+ * than jumping.
+ */
+function crossfade(): void {
+  if (!canvas || !instance) return;
+  stage.querySelector('.fade')?.remove();
+  const still = document.createElement('canvas');
+  still.className = 'fade';
+  still.width = canvas.width;
+  still.height = canvas.height;
+  // WebGL keeps no picture between frames, so draw one right before copying it.
+  instance.render();
+  still.getContext('2d')?.drawImage(canvas, 0, 0);
+  stage.append(still);
+  fading = { still, frames: 0 };
+}
+
+/** A still waiting to fade, and frames drawn since. */
+let fading: { still: HTMLCanvasElement; frames: number } | null = null;
+
+/**
+ * Starts the fade once the new picture has drawn a couple of frames: setting
+ * up a pattern (compiling shaders, say) can hold up the page for a moment,
+ * and a fade started before that would be over before anyone saw it.
+ */
+function advanceFade(): void {
+  if (!fading || ++fading.frames < 2) return;
+  const { still } = fading;
+  fading = null;
+  still
+    .animate(
+      reducedMotion.matches
+        ? [{ opacity: 1 }, { opacity: 0 }]
+        : [
+            { opacity: 1, transform: 'scale(1)' },
+            { opacity: 0, transform: 'scale(1.03)' },
+          ],
+      { duration: reducedMotion.matches ? FADE_MS / 2 : FADE_MS, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+    )
+    .finished.then(
+      () => still.remove(),
+      () => still.remove(),
+    );
+}
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
 let last = 0;
 function frame(time: number): void {
   requestAnimationFrame(frame);
   const dt = last ? time - last : 1000 / 60;
   last = time;
-  if (!instance) return;
+  if (!instance) {
+    advanceFade();
+    thumbs.tick(playing);
+    return;
+  }
   if (playing) {
     instance.step(dt);
     dirty = true;
@@ -151,6 +229,8 @@ function frame(time: number): void {
     instance.render();
     dirty = false;
   }
+  advanceFade();
+  thumbs.tick(playing);
 }
 
 /** Render the pattern at full size for `size` and download it as a PNG. */
@@ -195,6 +275,7 @@ function togglePlay(): void {
 }
 
 function restart(): void {
+  crossfade();
   state.seed = makeSeed();
   instance?.reset(hashSeed(state.seed));
   dirty = true;
@@ -203,6 +284,7 @@ function restart(): void {
 
 /** Jump to a fresh random look: new seed, preset-like params, another palette. */
 function randomize(): void {
+  if (++tipRandomizes >= TIP_RANDOMIZES) controls.dismissWelcome();
   undoStack.push(snapshot());
   applyState(randomizeState(state, pattern, PALETTES, makeSeed()));
   controls.setCanUndo(true);
@@ -224,6 +306,7 @@ function snapshot(): AppState {
 /** Show `next`: its pattern, params, palette and seed, regrown from the start. */
 function applyState(next: AppState): void {
   const switching = next.pattern !== pattern.id;
+  crossfade();
   if (switching) paramsByPattern.set(pattern.id, { ...state.params });
   state.seed = next.seed;
   state.params = { ...next.params };
@@ -291,6 +374,7 @@ function attachPainting(c: HTMLCanvasElement): void {
 }
 
 function saveUrl(): void {
+  thumbs.sync(thumbState());
   clearTimeout(urlTimer);
   urlTimer = window.setTimeout(() => {
     history.replaceState(null, '', location.pathname + encodeState(state, pattern));
@@ -299,10 +383,10 @@ function saveUrl(): void {
 
 function applyPaletteToPage(p: Palette): void {
   const root = document.documentElement;
-  const chrome = chromeColors(p.background, p.colors);
-  root.style.setProperty('--bg', chrome.bg);
-  root.style.setProperty('--ink', chrome.ink);
-  root.style.setProperty('--accent', chrome.accent);
+  const { accent, soft } = uiColors(p.colors);
+  root.style.setProperty('--bg', p.background);
+  root.style.setProperty('--accent', accent);
+  root.style.setProperty('--soft', soft);
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', p.background);
 }
 
@@ -341,5 +425,8 @@ window.addEventListener('keydown', (e) => {
 
 mount();
 saveUrl();
+// The main pattern gets the first frames; previews follow a moment later.
+window.setTimeout(() => thumbs.setVisible(controls.panelOpen), 400);
+if (isFirstVisit(browserStorage())) controls.showWelcome();
 new ResizeObserver(sizeCanvas).observe(stage);
 requestAnimationFrame(frame);

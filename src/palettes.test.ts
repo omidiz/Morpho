@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chromeColors, contrast, hexToRgb } from './logic/color';
+import { contrast, hexToRgb, UI_INK, UI_SURFACE, uiColors } from './logic/color';
 import { DEFAULT_PALETTE, findPalette, MAX_STOPS, PALETTES, rampStops } from './palettes';
 
 describe('palettes', () => {
@@ -37,10 +37,13 @@ describe('palettes', () => {
     }
   });
 
-  it('page text is readable in every palette', () => {
+  it('controls are readable in every palette', () => {
+    expect(contrast(UI_SURFACE, UI_INK)).toBeGreaterThanOrEqual(12);
     for (const p of PALETTES) {
-      const { bg, ink } = chromeColors(p.background, p.colors);
-      expect(contrast(bg, ink), p.id).toBeGreaterThanOrEqual(7);
+      const { accent, soft } = uiColors(p.colors);
+      // Randomize's label is the surface color on the accent.
+      expect(contrast(UI_SURFACE, accent), p.id).toBeGreaterThanOrEqual(7);
+      expect(contrast(UI_SURFACE, soft), p.id).toBeGreaterThanOrEqual(3);
     }
   });
 

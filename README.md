@@ -27,10 +27,13 @@ npm run build    # type-check and build to dist/
 - `src/ui/controls.ts`: builds the panel from a pattern's schema (a slider per
   parameter, with an optional quiet value readout; a switch for on/off ones; a
   row of named choices for ones like shape; nothing for ones only presets set),
-  plus the pattern picker, preset chips, palette swatches, play/pause/restart,
-  the Undo · Randomize · Share dock and the "Save wallpaper" sheet.
+  plus the pattern switcher, preset chips, palette swatches, play/pause/restart,
+  the Undo · Randomize · Share dock, the "Save wallpaper" menu and the
+  first-visit tip.
+- `src/ui/thumbnails.ts`: the switcher's live previews (see below).
 - `src/logic/`: pure, tested logic: seeded RNG, URL state, randomize, undo
-  history, share fallback, slider ↔ model mappings, frame governor, color
+  history, share fallback, first-visit flag, sheet snapping, slider ↔ model
+  mappings, frame governor, color
   contrast, export sizing, the L-system, plant species, forest layout and
   growth timing behind the plants, the seed-head layout behind Spirals, and
   the crowd, trail and export sizing behind Slime.
@@ -135,6 +138,43 @@ out of nothing more than that.
   inside it. Then it keeps growing for about 110 steps, with walking and
   reach scaled up, so the veins are redrawn sharp at full size rather than
   upscaled.
+
+## The studio
+
+The pattern fills the screen; everything else sits on one quiet dark surface
+over it, whatever the palette, so the controls never compete with the art.
+Only the accents (Randomize, selections, slider fills) take a color from the
+palette, picked to stand out on the dark surface (`uiColors` in
+`src/logic/color.ts`).
+
+- **Phones** (under 720 px): the controls are a bottom sheet that rests
+  closed, showing just the dock over the art. Pull it up by its handle (or
+  drag from anywhere in the dock; a press on a button stays a tap unless the
+  finger moves), flick it down to put it away. It settles to whichever end is
+  nearer unless flicked (`src/logic/sheet.ts`).
+- **Wider screens**: the controls are a card at the left that the button by
+  the wordmark folds away, with the dock in the bottom right. A phone on its
+  side gets the card too, but starts with it folded away.
+- **Pattern switcher**: each pattern has a small live thumbnail grown from
+  the current seed, palette and that pattern's own sliders. Each runs a tiny
+  instance of its pattern, zoomed out so the tile shows the texture (Turing
+  and Slime say how far via `thumbnail` on the pattern; Slime also runs a
+  small crowd). They are only created once the switcher is first shown,
+  fast-forward through their first few seconds so they don't start as bare
+  seeds, then move on every other frame, and only while the switcher can be
+  seen. They hold still when paused, and after growing in when the system
+  asks for reduced motion.
+- **Transitions**: switching pattern, Randomize, Undo, a look, a palette or
+  starting over lays a still of the old picture over the canvas and fades it
+  out as the new one grows. The fade waits until the new picture has drawn,
+  so setting up a pattern can't swallow it.
+- **First visit**: a tip over the dock says "Tap Randomize, then save what
+  you love". It goes away when tapped, when the save menu is opened or after
+  a few randomizes, and isn't shown again on that device (`localStorage`).
+- **Link previews**: `public/` holds the favicon (a golden-angle seed head,
+  as SVG and PNG), the Apple touch icon and `og.jpg`, a 1200×630 sunflower
+  exported from the app in the Pollen palette, which `index.html` names in
+  its Open Graph and Twitter tags.
 
 ## Exploring and sharing
 

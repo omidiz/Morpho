@@ -1,17 +1,38 @@
-/* Page colors come from the current palette (src/palettes.ts → chromeColors). */
+/*
+ * The art fills the screen; the controls sit on one quiet dark surface over
+ * it, whatever the palette. Only the accents come from the palette
+ * (src/logic/color.ts → uiColors), set on :root by main.ts.
+ */
 :root {
-  --bg: #061420;
-  --accent: #5ab3b6;
-  --ink: #cdf0e2;
+  --bg: #061420; /* the palette's background, behind the canvas */
+  --accent: #cdf0e2;
+  --soft: #5ab3b6;
+  --surface: #111316;
+  --ink: #ecebe6;
   /* Tinted, not blurred: blurring a live WebGL canvas every frame is costly on phones. */
-  --glass: color-mix(in srgb, var(--bg) 84%, transparent);
-  --line: color-mix(in srgb, var(--ink) 16%, transparent);
-  --text: var(--ink);
-  --muted: color-mix(in srgb, var(--ink) 64%, transparent);
-  --pad: max(14px, env(safe-area-inset-left));
+  --glass: color-mix(in srgb, var(--surface) 88%, transparent);
+  /* Big surfaces are nearly solid, so busy art behind them doesn't show through. */
+  --solid: color-mix(in srgb, var(--surface) 96%, transparent);
+  --line: color-mix(in srgb, var(--ink) 12%, transparent);
+  --muted: color-mix(in srgb, var(--ink) 60%, transparent);
+  --hover: color-mix(in srgb, var(--ink) 8%, transparent);
+  --pressed: color-mix(in srgb, var(--ink) 14%, transparent);
+  --shadow: 0 12px 40px -14px rgb(0 0 0 / 0.65);
+  --pad: max(12px, env(safe-area-inset-left));
+  --inner: 18px;
+  --top: max(10px, env(safe-area-inset-top));
+  --ease: cubic-bezier(0.22, 0.9, 0.24, 1);
   font-family: ui-rounded, 'SF Pro Rounded', 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  color: var(--text);
+  color: var(--ink);
   -webkit-tap-highlight-color: transparent;
+  color-scheme: dark;
+}
+
+/* Lets the sheet's surface and contents fade with how far it is pulled up. */
+@property --open {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
 }
 
 html,
@@ -21,16 +42,32 @@ body {
   overflow: hidden;
   background: var(--bg);
   overscroll-behavior: none;
+  transition: background-color 0.6s;
 }
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* Hidden things stay hidden even where a rule gives them a display. */
+[hidden] {
+  display: none !important;
+}
+
+/* --- Stage -------------------------------------------------------------- */
 
 #stage {
   position: fixed;
   inset: 0;
   width: 100vw;
   height: 100dvh;
+  overflow: hidden;
 }
 
 #stage canvas {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -38,39 +75,55 @@ body {
   cursor: crosshair;
 }
 
-/* --- Top bar ----------------------------------------------------------- */
+/* The picture from before a change, melting away (see crossfade in main.ts). */
+#stage canvas.fade {
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+
+.unsupported {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 32px;
+  text-align: center;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+/* --- Top bar ------------------------------------------------------------ */
 
 .bar {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: max(10px, env(safe-area-inset-top)) var(--pad) 0;
+  gap: 8px;
+  padding: var(--top) var(--pad) 0;
   pointer-events: none;
 }
 
-.bar > * {
+.bar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--glass);
   pointer-events: auto;
 }
 
 .wordmark {
-  font-size: 19px;
+  padding: 0 12px 1px;
+  font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  padding: 6px 14px 7px;
-  border-radius: 999px;
-  background: var(--glass);
-}
-
-.transport {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 999px;
-  background: var(--glass);
 }
 
 .icon-btn {
@@ -78,18 +131,21 @@ body {
   height: 44px;
   display: grid;
   place-items: center;
+  flex: none;
   padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: var(--text);
+  color: var(--ink);
   cursor: pointer;
-  transition: background-color 0.15s;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
 }
 
 .icon-btn svg {
-  width: 22px;
-  height: 22px;
+  width: 21px;
+  height: 21px;
   fill: currentColor;
 }
 
@@ -97,64 +153,199 @@ body {
   fill: none;
 }
 
-/* Four buttons and the wordmark still fit on the narrowest phones. */
-@media (max-width: 359px) {
-  .icon-btn {
-    width: 40px;
-    height: 40px;
-  }
-
-  .transport {
-    gap: 2px;
-  }
-}
-
 .icon-btn:hover {
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  background: var(--hover);
 }
 
 .icon-btn:active {
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  background: var(--pressed);
 }
 
 .icon-btn[aria-expanded='true'] {
-  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  background: var(--pressed);
+}
+
+.icon-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: transparent;
+}
+
+/* On phones the sheet's handle does this job. */
+.panel-btn {
+  display: none;
+}
+
+/* --- Panel: a bottom sheet on phones ------------------------------------ */
+
+.panel {
+  --offset: 0px;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--top) - 62px);
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  transform: translate3d(0, var(--offset), 0);
+  isolation: isolate;
+  transition:
+    transform 0.42s var(--ease),
+    --open 0.42s var(--ease);
+}
+
+.panel.is-dragging {
+  transition: none;
+}
+
+/* The sheet's surface: there when open, gone when only the dock shows. */
+.panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 24px 24px 0 0;
+  background: var(--solid);
+  box-shadow: 0 -10px 40px -18px rgb(0 0 0 / 0.7);
+  opacity: var(--open);
+  pointer-events: none;
+}
+
+.panel-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 var(--pad) 12px;
+  /* Dragging here moves the sheet, not the page. */
+  touch-action: none;
+}
+
+.grip {
+  display: grid;
+  place-items: center;
+  width: 120px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+}
+
+.grip-bar {
+  width: 40px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--ink);
+  opacity: 0.6;
+  box-shadow: 0 1px 6px rgb(0 0 0 / 0.45);
+  transition: opacity 0.2s;
+}
+
+.grip:hover .grip-bar {
+  opacity: 0.9;
+}
+
+.panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+  padding: 2px 0 8px;
+  opacity: var(--open);
+}
+
+.panel.is-closed .panel-body {
+  pointer-events: none;
+}
+
+/* --- Panel: a card at the left on wide screens -------------------------- */
+
+@media (min-width: 720px) {
+  .panel-btn {
+    display: grid;
+  }
+
+  .panel {
+    left: var(--pad);
+    right: auto;
+    top: calc(var(--top) + 62px);
+    bottom: auto;
+    width: 340px;
+    max-height: calc(100dvh - var(--top) - 62px - max(16px, env(safe-area-inset-bottom)));
+    padding: 14px 0 6px;
+    transform: none;
+    transition:
+      transform 0.36s var(--ease),
+      opacity 0.26s;
+  }
+
+  .panel::before {
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    opacity: 1;
+  }
+
+  .panel.is-closed {
+    transform: translateX(calc(-100% - 24px));
+    opacity: 0;
+  }
+
+  .panel-head {
+    display: none;
+  }
+
+  .panel-body {
+    opacity: 1;
+  }
 }
 
 /* --- Dock: undo, randomize, share --------------------------------------- */
 
 .dock {
-  --lift: 0px;
-  position: fixed;
-  left: var(--pad);
-  right: var(--pad);
-  bottom: max(14px, env(safe-area-inset-bottom));
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  pointer-events: none;
-  transform: translateY(calc(-1 * var(--lift)));
-  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  width: 100%;
 }
 
-/* Wide screens: the panel sits at the left, so the dock goes bottom right. */
 @media (min-width: 720px) {
   .dock {
-    left: auto;
-    align-items: flex-end;
-    transform: none;
+    position: fixed;
+    right: var(--pad);
+    bottom: max(16px, env(safe-area-inset-bottom));
+    z-index: 2;
+    width: auto;
   }
 }
 
 .dock-row {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 5px;
   border-radius: 999px;
+}
+
+.dock-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
   background: var(--glass);
-  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
-  pointer-events: auto;
+  box-shadow: var(--shadow);
+}
+
+/* In the sheet, the dock's own backing melts into the sheet as it opens. */
+.panel .dock-row::before {
+  opacity: calc(1 - var(--open));
 }
 
 .dock-btn {
@@ -162,36 +353,30 @@ body {
   height: 50px;
 }
 
-.dock-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-  background: transparent;
-}
-
 .randomize {
   --spin: 0deg;
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 56px;
+  height: 54px;
   padding: 0 26px 0 20px;
   border: 0;
   border-radius: 999px;
-  background: var(--ink);
-  color: var(--bg);
-  font: inherit;
+  background: var(--accent);
+  color: var(--surface);
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.01em;
   cursor: pointer;
   transition:
     transform 0.15s,
-    filter 0.15s;
+    filter 0.15s,
+    background-color 0.6s;
 }
 
 .randomize svg {
-  width: 26px;
-  height: 26px;
+  width: 25px;
+  height: 25px;
   fill: currentColor;
   transform: rotate(var(--spin));
   transition: transform 0.45s cubic-bezier(0.3, 1.5, 0.5, 1);
@@ -205,12 +390,46 @@ body {
   transform: scale(0.96);
 }
 
+/* Notes float above the dock: the first-visit tip and short confirmations. */
+.dock-notes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Clear of the sheet's handle above the dock. */
+  bottom: calc(100% + 34px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.dock-notes > * {
+  pointer-events: auto;
+}
+
+@media (min-width: 720px) {
+  .dock-notes {
+    left: auto;
+    right: 0;
+    bottom: calc(100% + 12px);
+    width: max-content;
+    align-items: flex-end;
+  }
+}
+
+/* With the sheet up there's no room for the tip; it comes back when the sheet goes down. */
+.panel:not(.is-closed) .welcome {
+  visibility: hidden;
+  opacity: 0;
+}
+
 .toast {
-  margin: 0 0 10px;
+  margin: 0;
   padding: 8px 16px;
   border-radius: 999px;
   background: var(--ink);
-  color: var(--bg);
+  color: var(--surface);
   font-size: 15px;
   font-weight: 600;
   opacity: 0;
@@ -229,308 +448,180 @@ body {
   transform: none;
 }
 
-/* --- Panel ------------------------------------------------------------- */
-
-.panel {
-  position: fixed;
-  left: var(--pad);
-  right: var(--pad);
-  bottom: max(14px, env(safe-area-inset-bottom));
-  padding: 14px 0 12px;
-  border-radius: 26px;
+.welcome {
+  position: relative;
+  max-width: calc(100vw - 2 * var(--pad));
+  padding: 10px 18px 11px;
+  border: 0;
+  border-radius: 16px;
   background: var(--glass);
-  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
-  /* On short screens, scroll rather than cover the top bar and the dock above. */
-  max-height: calc(
-    100dvh - max(14px, env(safe-area-inset-bottom)) - max(10px, env(safe-area-inset-top)) - 150px
-  );
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  transition:
-    transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
-    opacity 0.24s;
-}
-
-.panel.is-hidden {
-  transform: translateY(calc(100% + 24px));
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
   opacity: 0;
+  transform: translateY(8px);
+  transition:
+    opacity 0.4s,
+    transform 0.4s var(--ease);
 }
 
-@media (min-width: 720px) {
-  .panel {
-    right: auto;
-    width: 360px;
-    /* The dock sits beside the panel here, so only the top bar needs room. */
-    max-height: calc(
-      100dvh - max(14px, env(safe-area-inset-bottom)) - max(10px, env(safe-area-inset-top)) - 72px
-    );
+/* A little point toward Randomize. */
+.welcome::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 0 0 3px 0;
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+.welcome.is-shown {
+  opacity: 1;
+  transform: none;
+  animation: bob 2.8s ease-in-out 0.6s infinite;
+}
+
+@keyframes bob {
+  50% {
+    transform: translateY(-4px);
   }
 }
 
-/* Hidden rows stay hidden even where a rule gives them a display. */
-[hidden] {
-  display: none !important;
+/* --- Pattern switcher --------------------------------------------------- */
+
+.switcher {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 6px var(--inner) 14px;
 }
 
-/* Pattern picker: a soft segmented control at the top of the panel. */
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin: 0 16px 12px;
-  padding: 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tab {
-  flex: 1 0 auto;
-  min-height: 36px;
-  padding: 0 14px;
+.thumb {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
   border: 0;
-  border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
   cursor: pointer;
+}
+
+.thumb-art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px var(--line);
   transition:
-    background-color 0.15s,
-    color 0.15s;
+    transform 0.2s var(--ease),
+    box-shadow 0.2s,
+    background-color 0.6s;
 }
 
-.tab:hover {
-  color: var(--text);
+.thumb-art canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  animation: appear 0.5s ease-out;
 }
 
-.tab[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
-  color: var(--text);
+.thumb-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
 }
+
+.thumb:hover .thumb-art {
+  transform: scale(1.04);
+}
+
+.thumb:active .thumb-art {
+  transform: scale(0.97);
+}
+
+.thumb:hover,
+.thumb[aria-pressed='true'] {
+  color: var(--ink);
+}
+
+.thumb[aria-pressed='true'] .thumb-art {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--accent);
+}
+
+/* --- Looks, colors and sliders ------------------------------------------ */
 
 .presets {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 16px 4px;
+  gap: 7px;
+  padding: 0 var(--inner) 4px;
 }
 
 .chip {
   flex: none;
-  min-height: 38px;
-  padding: 0 15px;
+  min-height: 36px;
+  padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 15px;
+  color: var(--ink);
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition:
     background-color 0.15s,
+    border-color 0.15s,
     color 0.15s;
 }
 
 .chip:hover {
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  background: var(--hover);
 }
 
 .chip.is-active {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--bg);
-}
-
-.sliders {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 2px;
-  padding: 10px 20px 0;
-}
-
-.slider {
-  display: grid;
-  grid-template-columns: 7.5em 1fr;
-  align-items: center;
-  gap: 12px;
-  min-height: 40px;
-}
-
-.slider label,
-.row-label {
-  font-size: 15px;
-  color: var(--muted);
-}
-
-/* A quiet value under a slider's name, e.g. the spiral angle. */
-.readout {
-  display: block;
-  margin-top: 1px;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  opacity: 0.8;
-}
-
-/* Range input: soft track with a filled part and a pebble thumb. */
-input[type='range'] {
-  --fill: 50%;
-  appearance: none;
-  -webkit-appearance: none;
-  width: 100%;
-  height: 40px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-  touch-action: pan-y;
-}
-
-input[type='range']::-webkit-slider-runnable-track {
-  height: 6px;
-  border-radius: 3px;
-  background: linear-gradient(
-    to right,
-    var(--accent) var(--fill),
-    color-mix(in srgb, var(--ink) 18%, transparent) var(--fill)
-  );
-}
-
-input[type='range']::-moz-range-track {
-  height: 6px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
-}
-
-input[type='range']::-moz-range-progress {
-  height: 6px;
-  border-radius: 3px;
   background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
 }
-
-input[type='range']::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 24px;
-  height: 22px;
-  margin-top: -8px;
-  border: 0;
-  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
-  background: var(--ink);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
-input[type='range']::-moz-range-thumb {
-  width: 24px;
-  height: 22px;
-  border: 0;
-  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
-  background: var(--ink);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
-/* On/off switch, in a slider row. */
-.switch {
-  justify-self: end;
-  width: 52px;
-  height: 30px;
-  padding: 3px;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.switch-knob {
-  display: block;
-  width: 24px;
-  height: 24px;
-  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
-  background: var(--ink);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
-  transition: transform 0.22s cubic-bezier(0.3, 1.4, 0.5, 1);
-}
-
-.switch[aria-checked='true'] {
-  background: var(--accent);
-}
-
-.switch[aria-checked='true'] .switch-knob {
-  transform: translateX(22px);
-}
-
-/* A row of named choices, in a slider row: a small segmented control. */
-.choices {
-  display: flex;
-  gap: 3px;
-  padding: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-}
-
-.choice {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 34px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    color 0.15s;
-}
-
-/* Narrow phones: the choices go under their name, across the whole row. */
-@media (max-width: 379px) {
-  .choice-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 4px;
-    padding: 4px 0;
-  }
-}
-
-.choice:hover {
-  color: var(--text);
-}
-
-.choice[aria-checked='true'] {
-  background: color-mix(in srgb, var(--ink) 18%, transparent);
-  color: var(--text);
-}
-
-/* --- Palettes ---------------------------------------------------------- */
 
 .palettes {
-  padding: 12px 20px 0;
+  padding: 14px var(--inner) 2px;
 }
 
-.palette-head {
+.section-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 8px;
-  font-size: 15px;
+  margin-bottom: 9px;
+  font-size: 14px;
   color: var(--muted);
 }
 
 .palette-name {
-  color: var(--text);
+  color: var(--ink);
   font-weight: 600;
 }
 
 .swatches {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 36px));
+  grid-template-columns: repeat(8, minmax(0, 34px));
   justify-content: space-between;
   gap: 6px;
 }
@@ -551,48 +642,246 @@ input[type='range']::-moz-range-thumb {
 
 .swatch[aria-checked='true'] {
   box-shadow:
-    0 0 0 2px var(--bg),
+    0 0 0 2px var(--surface),
     0 0 0 4px var(--ink);
 }
 
-/* --- Save sheet -------------------------------------------------------- */
+.sliders {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding: 10px var(--inner) 0;
+}
 
-.sheet {
+.slider {
+  display: grid;
+  grid-template-columns: 7.5em minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 42px;
+}
+
+.slider label,
+.row-label {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* A quiet value under a slider's name, e.g. the spiral angle. */
+.readout {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+/* Range input: soft track with a filled part and a pebble thumb. */
+input[type='range'] {
+  --fill: 50%;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 42px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: pan-y;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--soft) var(--fill),
+    color-mix(in srgb, var(--ink) 14%, transparent) var(--fill)
+  );
+}
+
+input[type='range']::-moz-range-track {
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+
+input[type='range']::-moz-range-progress {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--soft);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 20px;
+  margin-top: -7.5px;
+  border: 0;
+  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
+  background: var(--ink);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 22px;
+  height: 20px;
+  border: 0;
+  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
+  background: var(--ink);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+}
+
+/* On/off switch, in a slider row. */
+.switch {
+  justify-self: end;
+  width: 50px;
+  height: 30px;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.switch-knob {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
+  background: var(--ink);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.4);
+  transition: transform 0.22s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--soft);
+}
+
+.switch[aria-checked='true'] .switch-knob {
+  transform: translateX(20px);
+}
+
+/* A row of named choices, in a slider row: a small segmented control. */
+.choices {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.choice {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+/* Narrow phones: the choices go under their name, across the whole row. */
+@media (max-width: 379px) {
+  .choice-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 4px 0;
+  }
+}
+
+.choice:hover {
+  color: var(--ink);
+}
+
+.choice[aria-checked='true'] {
+  background: var(--pressed);
+  color: var(--ink);
+}
+
+.hint {
+  margin: 8px var(--inner) 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+  transition: opacity 0.6s;
+}
+
+.hint.is-gone {
+  opacity: 0;
+}
+
+/* A new pattern's controls settle in rather than snapping. */
+.panel-body.is-entering :is(.presets, .sliders, .hint) {
+  animation: settle 0.38s var(--ease) both;
+}
+
+.panel-body.is-entering .sliders {
+  animation-delay: 0.04s;
+}
+
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}
+
+/* --- Save menu ---------------------------------------------------------- */
+
+.save-menu {
   position: fixed;
-  top: calc(max(10px, env(safe-area-inset-top)) + 60px);
+  top: calc(var(--top) + 60px);
   left: var(--pad);
   right: var(--pad);
-  padding: 14px 14px 14px;
-  border-radius: 26px;
-  background: var(--glass);
-  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
+  z-index: 4;
+  padding: 14px;
+  border-radius: 24px;
+  background: var(--solid);
+  box-shadow: var(--shadow);
+  transform-origin: top right;
   transition:
-    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 0.26s var(--ease),
     opacity 0.2s;
 }
 
-.sheet.is-hidden {
-  transform: translateY(-12px) scale(0.98);
+.save-menu.is-hidden {
+  transform: translateY(-10px) scale(0.98);
   opacity: 0;
   pointer-events: none;
 }
 
 @media (min-width: 720px) {
-  .sheet {
+  .save-menu {
     left: auto;
-    width: 360px;
+    width: 340px;
   }
 }
 
-.sheet-title {
-  margin: 0 6px 12px;
-  font-size: 17px;
+.save-title {
+  margin: 2px 6px 12px;
+  font-size: 16px;
   font-weight: 700;
 }
 
 .size-options {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -603,14 +892,16 @@ input[type='range']::-moz-range-thumb {
   display: grid;
   justify-items: center;
   gap: 4px;
-  padding: 12px 6px 10px;
+  min-width: 0;
+  padding: 12px 4px 10px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: transparent;
-  color: var(--text);
-  font: inherit;
+  color: var(--ink);
   cursor: pointer;
-  transition: background-color 0.15s, opacity 0.15s;
+  transition:
+    background-color 0.15s,
+    opacity 0.15s;
 }
 
 /* Progress fills the button from the left while the image is made. */
@@ -619,7 +910,7 @@ input[type='range']::-moz-range-thumb {
   position: absolute;
   inset: 0;
   width: var(--progress);
-  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--soft) 30%, transparent);
   transition: width 0.2s;
 }
 
@@ -628,7 +919,7 @@ input[type='range']::-moz-range-thumb {
 }
 
 .size-option:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  background: var(--hover);
 }
 
 .size-option:disabled {
@@ -639,8 +930,8 @@ input[type='range']::-moz-range-thumb {
 .size-frame {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
 }
 
 .size-shape {
@@ -655,27 +946,36 @@ input[type='range']::-moz-range-thumb {
 }
 
 .size-status {
+  max-width: 100%;
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.hint {
-  margin: 6px 20px 0;
-  font-size: 13px;
-  color: var(--muted);
-  transition: opacity 0.6s;
+/* --- Narrowest phones --------------------------------------------------- */
+
+@media (max-width: 359px) {
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .randomize {
+    padding: 0 20px 0 16px;
+  }
+
+  .switcher {
+    gap: 8px;
+  }
 }
 
-.hint.is-gone {
-  opacity: 0;
-}
-
-/* --- Focus & motion ---------------------------------------------------- */
+/* --- Focus & motion ----------------------------------------------------- */
 
 :focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -684,35 +984,21 @@ input[type='range']:focus-visible {
   border-radius: 12px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .panel,
-  .sheet,
-  .swatch,
-  .size-option,
-  .size-option::before,
-  .hint,
-  .chip,
-  .tab,
-  .choice,
-  .switch,
-  .switch-knob,
-  .icon-btn,
-  .dock,
-  .randomize,
-  .randomize svg,
-  .toast {
-    transition: none;
-  }
+.thumb:focus-visible {
+  outline: none;
 }
 
-.unsupported {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  padding: 32px;
-  text-align: center;
-  font-size: 17px;
-  line-height: 1.5;
+.thumb:focus-visible .thumb-art {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

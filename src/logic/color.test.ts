@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chromeColors, contrast, hexToRgb, mixHex } from './color';
+import { contrast, hexToRgb, mixHex, UI_SURFACE, uiColors } from './color';
 
 describe('hexToRgb', () => {
   it('parses long and short hex', () => {
@@ -18,13 +18,19 @@ describe('contrast', () => {
   });
 });
 
-describe('chromeColors', () => {
-  it('uses the most visible color for text, the next for accents', () => {
-    expect(chromeColors('#ffffff', ['#eeeeee', '#222222', '#888888'])).toEqual({
-      bg: '#ffffff',
-      ink: '#222222',
-      accent: '#888888',
+describe('uiColors', () => {
+  it('uses the most visible color as the accent, the next for slider fills', () => {
+    expect(uiColors(['#222222', '#eeeeee', '#888888'], '#000000')).toEqual({
+      accent: '#eeeeee',
+      soft: '#888888',
     });
+  });
+  it('falls back to the accent when the second color would vanish', () => {
+    expect(uiColors(['#eeeeee', '#141414'], '#111111').soft).toBe('#eeeeee');
+  });
+  it('lifts a palette of dark colors until it reads', () => {
+    const { accent } = uiColors(['#202020', '#303030'], UI_SURFACE);
+    expect(contrast(accent, UI_SURFACE)).toBeGreaterThanOrEqual(7);
   });
 });
 

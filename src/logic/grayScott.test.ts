@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandEdgeKill,
+  EXPORT_MAX_CELLS,
+  EXPORT_MAX_STEPS,
+  EXPORT_SETTLE_TIME,
+  exportGrid,
   FEED_MAX,
   FEED_MIN,
   fromFeedKill,
@@ -85,5 +89,48 @@ describe('seedField', () => {
       expect(x).toBeGreaterThanOrEqual(0);
       expect(x).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('exportGrid', () => {
+  it('regrows a phone screen on a finer grid for a phone wallpaper', () => {
+    // 390×844 CSS view with 2-CSS-px cells → 195×422 grid.
+    const g = exportGrid(390, 844, { width: 195, height: 422 }, 1170, 2532);
+    // Screen cells are 6 image px; export cells are 1.5 image px.
+    expect(g.refine).toBeCloseTo(4);
+    expect(g.width).toBe(780);
+    expect(g.height).toBe(1688);
+    expect(g.reaction).toBeCloseTo(1 / 16);
+    expect(g.steps).toBe(Math.round(EXPORT_SETTLE_TIME * 16));
+    // The export covers the whole screen grid exactly.
+    expect(g.origin[0]).toBeCloseTo(0);
+    expect(g.origin[1]).toBeCloseTo(0);
+    expect(g.stride[0] * g.width).toBeCloseTo(195);
+    expect(g.stride[1] * g.height).toBeCloseTo(422);
+  });
+
+  it('crops to the middle when shapes differ', () => {
+    const g = exportGrid(400, 800, { width: 200, height: 400 }, 2560, 1440);
+    expect(g.stride[0] * g.width).toBeCloseTo(200); // full width
+    const visible = g.stride[1] * g.height;
+    expect(visible).toBeCloseTo(112.5); // a 16:9 band
+    expect(g.origin[1]).toBeCloseTo((400 - visible) / 2);
+  });
+
+  it('stays within the cell and step caps', () => {
+    for (const [w, h] of [[2560, 1440], [1170, 2532], [2048, 2048], [8000, 8000]]) {
+      const g = exportGrid(320, 320, { width: 64, height: 64 }, w, h);
+      expect(g.width * g.height).toBeLessThanOrEqual(EXPORT_MAX_CELLS * 1.01);
+      expect(g.steps).toBeLessThanOrEqual(EXPORT_MAX_STEPS);
+      expect(g.reaction).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('is never coarser than the screen', () => {
+    // Huge screen cells (cell cap kicked in) vs. a small image.
+    const g = exportGrid(4000, 4000, { width: 1000, height: 1000 }, 1000, 1000);
+    expect(g.width).toBe(1000);
+    expect(g.refine).toBeCloseTo(1);
+    expect(g.reaction).toBe(1);
   });
 });

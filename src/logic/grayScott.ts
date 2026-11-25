@@ -1,3 +1,4 @@
+import { coverFit } from './export';
 import type { Rng } from './rng';
 
 /**
@@ -141,3 +142,74 @@ export function stamp(
 function clamp01(x: number): number {
   return Math.min(1, Math.max(0, x));
 }
+
+/** Target size of one simulated cell in an exported image, in image pixels. */
+export const EXPORT_CELL_PX = 1.5;
+/** Cap on cells for an export, to stay within a phone's GPU memory. */
+export const EXPORT_MAX_CELLS = 2_000_000;
+/** How long an export keeps growing at full resolution, in on-screen steps. */
+export const EXPORT_SETTLE_TIME = 30;
+export const EXPORT_MAX_STEPS = 1500;
+
+/** How to grow an exported image from what is on screen. */
+export interface ExportGrid {
+  /** Export grid size in cells. */
+  width: number;
+  height: number;
+  /** Export cells per screen cell along each side (≥ 1 unless capped). */
+  refine: number;
+  /**
+   * Where export cell centers sample the screen grid, in screen cells:
+   * position = origin + (cell index + 0.5) · stride. Y is up on both grids.
+   */
+  origin: [number, number];
+  stride: [number, number];
+  /** Simulation steps to run at full resolution. */
+  steps: number;
+  /**
+   * Scale on the reaction terms per step. A grid `refine` times finer needs
+   * steps 1/refine² as long so that patterns keep their size on the page
+   * instead of re-forming at the finer grid's natural scale.
+   */
+  reaction: number;
+}
+
+/**
+ * Plan an export of outWidth × outHeight pixels from a screen grid that
+ * covers a cssWidth × cssHeight view. The view is fitted like CSS
+ * `object-fit: cover`; the export grid is finer than the screen's, so the
+ * pattern is regrown with real detail rather than upscaled.
+ */
+export function exportGrid(
+  cssWidth: number,
+  cssHeight: number,
+  screen: { width: number; height: number },
+  outWidth: number,
+  outHeight: number,
+): ExportGrid {
+  const fit = coverFit(cssWidth, cssHeight, outWidth, outHeight).scale;
+  const cellsPerCssX = screen.width / cssWidth;
+  const cellsPerCssY = screen.height / cssHeight;
+  // Output pixels per screen cell.
+  const screenCellPx = fit / Math.sqrt(cellsPerCssX * cellsPerCssY);
+  // Never coarser than the screen, unless the cell cap demands it.
+  let cellPx = Math.min(EXPORT_CELL_PX, screenCellPx);
+  cellPx = Math.max(cellPx, Math.sqrt((outWidth * outHeight) / EXPORT_MAX_CELLS));
+  const width = Math.max(8, Math.round(outWidth / cellPx));
+  const height = Math.max(8, Math.round(outHeight / cellPx));
+  const refine = screenCellPx / cellPx;
+  const r2 = Math.max(1, refine * refine);
+  return {
+    width,
+    height,
+    refine,
+    origin: [
+      screen.width / 2 - (outWidth / 2 / fit) * cellsPerCssX,
+      screen.height / 2 - (outHeight / 2 / fit) * cellsPerCssY,
+    ],
+    stride: [(outWidth / width / fit) * cellsPerCssX, (outHeight / height / fit) * cellsPerCssY],
+    steps: Math.min(EXPORT_MAX_STEPS, Math.round(EXPORT_SETTLE_TIME * r2)),
+    reaction: 1 / r2,
+  };
+}
+

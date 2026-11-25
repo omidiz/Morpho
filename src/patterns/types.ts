@@ -28,6 +28,11 @@ export interface PatternOptions {
   palette: Palette;
 }
 
+export interface ExportOptions {
+  /** Called as the work moves along, with a fraction from 0 to 1. */
+  onProgress?(fraction: number): void;
+}
+
 /** A running pattern on one canvas. */
 export interface PatternInstance {
   /** Advance the simulation by one animation frame of `dtMs` milliseconds. */
@@ -40,6 +45,13 @@ export interface PatternInstance {
   setPalette(palette: Palette): void;
   /** Start over from a new seed. */
   reset(seed: number): void;
+  /**
+   * Draw the current pattern afresh at exactly width × height pixels (not an
+   * upscale of the screen) and resolve with a canvas holding the image. The
+   * view is fitted like CSS `object-fit: cover`. Simulations may keep running
+   * for a moment at the new resolution so the detail is real.
+   */
+  renderImage(width: number, height: number, options?: ExportOptions): Promise<HTMLCanvasElement>;
   /** Paint along a stroke from `from` to `to` (a tap has from === to). */
   paint?(from: Point, to: Point): void;
   dispose(): void;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hexToRgb } from './color';
+import { chromeColors, contrast, hexToRgb } from './color';
 
 describe('hexToRgb', () => {
   it('parses long and short hex', () => {
@@ -8,5 +8,22 @@ describe('hexToRgb', () => {
   });
   it('throws on junk', () => {
     expect(() => hexToRgb('nope')).toThrow();
+  });
+});
+
+describe('contrast', () => {
+  it('matches the WCAG extremes', () => {
+    expect(contrast('#000', '#fff')).toBeCloseTo(21);
+    expect(contrast('#777', '#777')).toBe(1);
+  });
+});
+
+describe('chromeColors', () => {
+  it('uses the most visible color for text, the next for accents', () => {
+    expect(chromeColors('#ffffff', ['#eeeeee', '#222222', '#888888'])).toEqual({
+      bg: '#ffffff',
+      ink: '#222222',
+      accent: '#888888',
+    });
   });
 });

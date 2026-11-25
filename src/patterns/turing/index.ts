@@ -1,6 +1,7 @@
 import { hexToRgb } from '../../logic/color';
 import { FrameGovernor, StepAccumulator } from '../../logic/governor';
 import {
+  exportGrid,
   fromFeedKill,
   gridSize,
   seedField,
@@ -10,7 +11,7 @@ import {
 } from '../../logic/grayScott';
 import type { ParamSpec, ParamValues } from '../../logic/params';
 import { mulberry32 } from '../../logic/rng';
-import type { Palette } from '../../palettes';
+import { MAX_STOPS, rampStops, type Palette } from '../../palettes';
 import {
   createProgram,
   createTarget,
@@ -23,6 +24,7 @@ import {
 } from '../gl';
 import {
   UnsupportedError,
+  type ExportOptions,
   type Pattern,
   type PatternInstance,
   type PatternOptions,
@@ -57,6 +59,12 @@ const PARAMS: ParamSpec[] = [
 
 /** Radius of a painted stroke, in CSS pixels. */
 const BRUSH_RADIUS_CSS = 12;
+/** Strength of the surface shading, per screen cell. */
+const EMBOSS = 2.2;
+/** Export work per frame, in cell updates, so the page stays responsive. */
+const EXPORT_CELL_STEPS_PER_FRAME = 12_000_000;
+/** Exports are drawn and read back in tiles no bigger than this. */
+const EXPORT_TILE = 1024;
 
 export const turing: Pattern = {
   id: 'turing',
@@ -85,7 +93,9 @@ class TuringInstance implements PatternInstance {
   private seed: number;
   private params: ParamValues;
   private feedKill = { feed: 0, kill: 0 };
-  private readonly colors = new Float32Array(12);
+  private readonly colors = new Float32Array(MAX_STOPS * 3);
+  private stops = 2;
+  private exporting = false;
   private readonly governor = new FrameGovernor();
   private readonly accumulator = new StepAccumulator();
   private strokes: [Point, Point][] = [];
@@ -107,15 +117,17 @@ class TuringInstance implements PatternInstance {
     this.gl = gl;
     this.format = format;
     this.vao = gl.createVertexArray()!;
-    this.stepProg = createProgram(gl, FULLSCREEN_VS, STEP_FS, ['uState', 'uTexel', 'uFeedKill']);
+    this.stepProg = createProgram(gl, FULLSCREEN_VS, STEP_FS, [
+      'uState', 'uTexel', 'uFeedKill', 'uReaction',
+    ]);
     this.brushProg = createProgram(gl, FULLSCREEN_VS, BRUSH_FS, [
       'uState', 'uTexel', 'uSeg', 'uRadius', 'uSalt',
     ]);
     this.resampleProg = createProgram(gl, FULLSCREEN_VS, RESAMPLE_FS, [
-      'uSrc', 'uSrcSize', 'uDstTexel',
+      'uSrc', 'uSrcSize', 'uOrigin', 'uStride',
     ]);
     this.displayProg = createProgram(gl, FULLSCREEN_VS, DISPLAY_FS, [
-      'uState', 'uSize', 'uResolution', 'uColors',
+      'uState', 'uSize', 'uResolution', 'uOffset', 'uColors', 'uStops', 'uEmboss',
     ]);
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
@@ -142,7 +154,9 @@ class TuringInstance implements PatternInstance {
   }
 
   setPalette(palette: Palette): void {
-    palette.colors.forEach((hex, i) => this.colors.set(hexToRgb(hex), i * 3));
+    const stops = rampStops(palette).slice(0, MAX_STOPS);
+    stops.forEach((hex, i) => this.colors.set(hexToRgb(hex), i * 3));
+    this.stops = stops.length;
   }
 
   reset(seed: number): void {
@@ -157,19 +171,13 @@ class TuringInstance implements PatternInstance {
 
   step(dtMs: number): void {
     const gl = this.gl;
-    if (!this.targets || !this.grid || gl.isContextLost()) return;
+    if (!this.targets || !this.grid || gl.isContextLost() || this.exporting) return;
     this.flushStrokes();
     const budget = this.governor.update(dtMs);
     const steps = this.accumulator.next(stepsPerFrame(this.params.speed), dtMs, budget);
     if (steps === 0) return;
 
-    const { width, height } = this.grid;
-    const u = this.stepProg.uniforms;
-    gl.useProgram(this.stepProg.program);
-    gl.uniform1i(u.uState, 0);
-    gl.uniform2f(u.uTexel, 1 / width, 1 / height);
-    gl.uniform2f(u.uFeedKill, this.feedKill.feed, this.feedKill.kill);
-    gl.viewport(0, 0, width, height);
+    this.useStep(this.grid, this.feedKill, 1);
     for (let i = 0; i < steps; i++) this.pass();
   }
 
@@ -177,16 +185,106 @@ class TuringInstance implements PatternInstance {
     const gl = this.gl;
     if (!this.targets || !this.grid || gl.isContextLost()) return;
     this.flushStrokes();
-    const u = this.displayProg.uniforms;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.useProgram(this.displayProg.program);
-    gl.bindTexture(gl.TEXTURE_2D, this.targets[this.current].texture);
-    gl.uniform1i(u.uState, 0);
-    gl.uniform2f(u.uSize, this.grid.width, this.grid.height);
-    gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.uniform3fv(u.uColors, this.colors);
+    this.useDisplay(this.targets[this.current], this.grid, gl.drawingBufferWidth, gl.drawingBufferHeight, EMBOSS);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /**
+   * Regrow what is on screen on a finer grid sized for the image, let it
+   * settle there for a moment, then draw it at width × height. The screen
+   * keeps showing the current state, paused, until this finishes.
+   */
+  async renderImage(
+    width: number,
+    height: number,
+    { onProgress }: ExportOptions = {},
+  ): Promise<HTMLCanvasElement> {
+    const gl = this.gl;
+    if (!this.targets || !this.grid || gl.isContextLost()) throw new Error('Nothing to export yet');
+    if (this.exporting) throw new Error('Already exporting');
+    this.flushStrokes();
+    const plan = exportGrid(this.cssWidth, this.cssHeight, this.grid, width, height);
+    const maxSize = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]);
+    if (plan.width > maxSize || plan.height > maxSize) throw new Error('Image is too large for this device');
+
+    this.exporting = true;
+    const feedKill = { ...this.feedKill };
+    const grid: GridSize = { width: plan.width, height: plan.height, cellSize: 0 };
+    const sim: [RenderTarget, RenderTarget] = [
+      createTarget(gl, this.format, grid.width, grid.height),
+      createTarget(gl, this.format, grid.width, grid.height),
+    ];
+    const tileSize = Math.min(EXPORT_TILE, maxSize);
+    const tile = createTarget(gl, { internalFormat: gl.RGBA8, label: 'RGBA8' }, tileSize, tileSize);
+    try {
+      // 1. Copy the visible part of the screen grid onto the finer grid.
+      const r = this.resampleProg.uniforms;
+      gl.useProgram(this.resampleProg.program);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, sim[0].framebuffer);
+      gl.bindTexture(gl.TEXTURE_2D, this.targets[this.current].texture);
+      gl.viewport(0, 0, grid.width, grid.height);
+      gl.uniform1i(r.uSrc, 0);
+      gl.uniform2f(r.uSrcSize, this.grid.width, this.grid.height);
+      gl.uniform2f(r.uOrigin, plan.origin[0], plan.origin[1]);
+      gl.uniform2f(r.uStride, plan.stride[0], plan.stride[1]);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      // 2. Keep growing at full resolution, a slice per frame.
+      let cur = 0;
+      const perFrame = Math.max(1, Math.floor(EXPORT_CELL_STEPS_PER_FRAME / (grid.width * grid.height)));
+      for (let done = 0; done < plan.steps; ) {
+        const n = Math.min(perFrame, plan.steps - done);
+        this.useStep(grid, feedKill, plan.reaction);
+        for (let i = 0; i < n; i++) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, sim[1 - cur].framebuffer);
+          gl.bindTexture(gl.TEXTURE_2D, sim[cur].texture);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          cur = 1 - cur;
+        }
+        done += n;
+        await waitForGpu(gl);
+        if (gl.isContextLost()) throw new Error('Lost the graphics context');
+        onProgress?.(0.9 * (done / plan.steps));
+      }
+
+      // 3. Draw through the palette, tile by tile, into a 2D canvas.
+      const out = document.createElement('canvas');
+      out.width = width;
+      out.height = height;
+      const ctx = out.getContext('2d')!;
+      const pixels = new Uint8Array(tileSize * tileSize * 4);
+      const tiles = Math.ceil(width / tileSize) * Math.ceil(height / tileSize);
+      let drawn = 0;
+      for (let y0 = 0; y0 < height; y0 += tileSize) {
+        for (let x0 = 0; x0 < width; x0 += tileSize) {
+          const tw = Math.min(tileSize, width - x0);
+          const th = Math.min(tileSize, height - y0);
+          gl.bindFramebuffer(gl.FRAMEBUFFER, tile.framebuffer);
+          gl.viewport(0, 0, tw, th);
+          this.useDisplay(sim[cur], grid, width, height, EMBOSS * plan.refine);
+          gl.uniform2f(this.displayProg.uniforms.uOffset, x0, y0);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.readPixels(0, 0, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          // GL rows run bottom-up; images run top-down.
+          const img = ctx.createImageData(tw, th);
+          for (let row = 0; row < th; row++) {
+            const src = (th - 1 - row) * tw * 4;
+            img.data.set(pixels.subarray(src, src + tw * 4), row * tw * 4);
+          }
+          ctx.putImageData(img, x0, height - y0 - th);
+          onProgress?.(0.9 + 0.1 * (++drawn / tiles));
+        }
+      }
+      return out;
+    } finally {
+      if (!gl.isContextLost()) {
+        sim.forEach((t) => deleteTarget(gl, t));
+        deleteTarget(gl, tile);
+      }
+      this.exporting = false;
+    }
   }
 
   dispose(): void {
@@ -201,6 +299,32 @@ class TuringInstance implements PatternInstance {
     this.targets = null;
     // Hand GPU memory back right away rather than waiting for GC.
     gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+
+  private useStep(grid: GridSize, feedKill: { feed: number; kill: number }, reaction: number): void {
+    const gl = this.gl;
+    const u = this.stepProg.uniforms;
+    gl.useProgram(this.stepProg.program);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform2f(u.uTexel, 1 / grid.width, 1 / grid.height);
+    gl.uniform2f(u.uFeedKill, feedKill.feed, feedKill.kill);
+    gl.uniform1f(u.uReaction, reaction);
+    gl.viewport(0, 0, grid.width, grid.height);
+  }
+
+  /** Bind the display program for drawing `state` into a width × height image. */
+  private useDisplay(state: RenderTarget, grid: GridSize, width: number, height: number, emboss: number): void {
+    const gl = this.gl;
+    const u = this.displayProg.uniforms;
+    gl.useProgram(this.displayProg.program);
+    gl.bindTexture(gl.TEXTURE_2D, state.texture);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform2f(u.uSize, grid.width, grid.height);
+    gl.uniform2f(u.uResolution, width, height);
+    gl.uniform2f(u.uOffset, 0, 0);
+    gl.uniform3fv(u.uColors, this.colors);
+    gl.uniform1i(u.uStops, this.stops);
+    gl.uniform1f(u.uEmboss, emboss);
   }
 
   /** One full-grid pass: read targets[current], write the other, then swap. */
@@ -254,7 +378,8 @@ class TuringInstance implements PatternInstance {
       gl.viewport(0, 0, next.width, next.height);
       gl.uniform1i(u.uSrc, 0);
       gl.uniform2f(u.uSrcSize, prev.width, prev.height);
-      gl.uniform2f(u.uDstTexel, 1 / next.width, 1 / next.height);
+      gl.uniform2f(u.uOrigin, 0, 0);
+      gl.uniform2f(u.uStride, prev.width / next.width, prev.height / next.height);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       this.targets.forEach((t) => deleteTarget(gl, t));
       this.targets = fresh;
@@ -273,6 +398,23 @@ class TuringInstance implements PatternInstance {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.width, grid.height, gl.RG, gl.FLOAT, data);
   }
+}
+
+/** Resolves once the GPU has finished the work queued so far (checked once per frame). */
+function waitForGpu(gl: WebGL2RenderingContext): Promise<void> {
+  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  gl.flush();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!sync || gl.isContextLost() || gl.getSyncParameter(sync, gl.SYNC_STATUS) === gl.SIGNALED) {
+        if (sync && !gl.isContextLost()) gl.deleteSync(sync);
+        resolve();
+      } else {
+        requestAnimationFrame(check);
+      }
+    };
+    requestAnimationFrame(check);
+  });
 }
 
 function round3(x: number): number {

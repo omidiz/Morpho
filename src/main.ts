@@ -1,7 +1,9 @@
 import './style.css';
+import { chromeColors } from './logic/color';
+import { exportFileName, WALLPAPER_SIZES, type WallpaperSize } from './logic/export';
 import { hashSeed, makeSeed } from './logic/rng';
 import { decodeState, encodeState, type AppState } from './logic/urlState';
-import { DEFAULT_PALETTE, type Palette } from './palettes';
+import { findPalette, PALETTES, type Palette } from './palettes';
 import { findPattern, PATTERNS } from './patterns';
 import { UnsupportedError, type PatternInstance, type Point } from './patterns/types';
 import { buildControls } from './ui/controls';
@@ -12,37 +14,52 @@ const MAX_PIXEL_RATIO = 2;
 const stage = document.querySelector<HTMLElement>('#stage')!;
 const ui = document.querySelector<HTMLElement>('#ui')!;
 
-const state: AppState = decodeState(location.search, PATTERNS, () => makeSeed());
+const state: AppState = decodeState(location.search, PATTERNS, PALETTES, () => makeSeed());
 const pattern = findPattern(state.pattern);
-const palette: Palette = DEFAULT_PALETTE;
+let palette: Palette = findPalette(state.palette);
 
 let canvas: HTMLCanvasElement | null = null;
 let instance: PatternInstance | null = null;
 let playing = true;
 let dirty = true;
 let urlTimer = 0;
+let saving = false;
 
 applyPaletteToPage(palette);
 
-const controls = buildControls(ui, pattern, state.params, {
-  onParam(key, value) {
-    state.params[key] = value;
-    instance?.setParams(state.params);
-    controls.setValues(state.params);
-    dirty = true;
-    saveUrl();
+const controls = buildControls(
+  ui,
+  { pattern, values: state.params, palettes: PALETTES, palette, sizes: WALLPAPER_SIZES },
+  {
+    onParam(key, value) {
+      state.params[key] = value;
+      instance?.setParams(state.params);
+      controls.setValues(state.params);
+      dirty = true;
+      saveUrl();
+    },
+    onPreset(preset) {
+      Object.assign(state.params, preset.values);
+      instance?.setParams(state.params);
+      instance?.reset(hashSeed(state.seed));
+      controls.setValues(state.params);
+      dirty = true;
+      saveUrl();
+    },
+    onPalette(next) {
+      palette = next;
+      state.palette = next.id;
+      instance?.setPalette(next);
+      controls.setPalette(next);
+      applyPaletteToPage(next);
+      dirty = true;
+      saveUrl();
+    },
+    onSave: saveWallpaper,
+    onTogglePlay: togglePlay,
+    onRestart: restart,
   },
-  onPreset(preset) {
-    Object.assign(state.params, preset.values);
-    instance?.setParams(state.params);
-    instance?.reset(hashSeed(state.seed));
-    controls.setValues(state.params);
-    dirty = true;
-    saveUrl();
-  },
-  onTogglePlay: togglePlay,
-  onRestart: restart,
-});
+);
 
 function mount(): void {
   instance?.dispose();
@@ -106,6 +123,42 @@ function frame(time: number): void {
   }
 }
 
+/** Render the pattern at full size for `size` and download it as a PNG. */
+async function saveWallpaper(size: WallpaperSize): Promise<void> {
+  if (!instance || saving) return;
+  saving = true;
+  const name = exportFileName(pattern.id, state.seed);
+  controls.setSaveStatus(size, { state: 'working', progress: 0 });
+  let ok = false;
+  try {
+    const image = await instance.renderImage(size.width, size.height, {
+      onProgress: (progress) => controls.setSaveStatus(size, { state: 'working', progress }),
+    });
+    const blob = await new Promise<Blob | null>((resolve) => image.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('Could not encode the image');
+    download(blob, name);
+    ok = true;
+  } catch (err) {
+    console.error(err);
+  } finally {
+    saving = false;
+  }
+  controls.setSaveStatus(size, { state: ok ? 'done' : 'failed' });
+  window.setTimeout(() => controls.setSaveStatus(size, null), ok ? 2000 : 4000);
+}
+
+function download(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // Give the browser time to start the download before letting go of the data.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 function togglePlay(): void {
   playing = !playing;
   controls.setPlaying(playing);
@@ -155,8 +208,11 @@ function saveUrl(): void {
 
 function applyPaletteToPage(p: Palette): void {
   const root = document.documentElement;
-  p.colors.forEach((c, i) => root.style.setProperty(`--c${i}`, c));
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', p.colors[0]);
+  const chrome = chromeColors(p.background, p.colors);
+  root.style.setProperty('--bg', chrome.bg);
+  root.style.setProperty('--ink', chrome.ink);
+  root.style.setProperty('--accent', chrome.accent);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', p.background);
 }
 
 function showUnsupported(): void {

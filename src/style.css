@@ -1,14 +1,13 @@
-/* Palette colors are set from src/palettes.ts at startup. */
+/* Page colors come from the current palette (src/palettes.ts → chromeColors). */
 :root {
-  --c0: #0d2b2f;
-  --c1: #24605d;
-  --c2: #8cc4ad;
-  --c3: #eaf2dc;
+  --bg: #061420;
+  --accent: #5ab3b6;
+  --ink: #cdf0e2;
   /* Tinted, not blurred: blurring a live WebGL canvas every frame is costly on phones. */
-  --glass: color-mix(in srgb, var(--c0) 84%, transparent);
-  --line: color-mix(in srgb, var(--c3) 16%, transparent);
-  --text: var(--c3);
-  --muted: color-mix(in srgb, var(--c3) 64%, transparent);
+  --glass: color-mix(in srgb, var(--bg) 84%, transparent);
+  --line: color-mix(in srgb, var(--ink) 16%, transparent);
+  --text: var(--ink);
+  --muted: color-mix(in srgb, var(--ink) 64%, transparent);
   --pad: max(14px, env(safe-area-inset-left));
   font-family: ui-rounded, 'SF Pro Rounded', 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--text);
@@ -20,7 +19,7 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--c0);
+  background: var(--bg);
   overscroll-behavior: none;
 }
 
@@ -98,16 +97,28 @@ body {
   fill: none;
 }
 
+/* Four buttons and the wordmark still fit on the narrowest phones. */
+@media (max-width: 359px) {
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .transport {
+    gap: 2px;
+  }
+}
+
 .icon-btn:hover {
-  background: color-mix(in srgb, var(--c3) 10%, transparent);
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
 }
 
 .icon-btn:active {
-  background: color-mix(in srgb, var(--c3) 18%, transparent);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
 .icon-btn[aria-expanded='true'] {
-  background: color-mix(in srgb, var(--c3) 14%, transparent);
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
 }
 
 /* --- Panel ------------------------------------------------------------- */
@@ -120,7 +131,7 @@ body {
   padding: 14px 0 12px;
   border-radius: 26px;
   background: var(--glass);
-  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--c0) 80%, black);
+  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
   transition:
     transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 0.24s;
@@ -163,13 +174,13 @@ body {
 }
 
 .chip:hover {
-  background: color-mix(in srgb, var(--c3) 8%, transparent);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
 .chip.is-active {
-  background: var(--c3);
-  border-color: var(--c3);
-  color: var(--c0);
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--bg);
 }
 
 .sliders {
@@ -209,21 +220,21 @@ input[type='range']::-webkit-slider-runnable-track {
   border-radius: 3px;
   background: linear-gradient(
     to right,
-    var(--c2) var(--fill),
-    color-mix(in srgb, var(--c3) 18%, transparent) var(--fill)
+    var(--accent) var(--fill),
+    color-mix(in srgb, var(--ink) 18%, transparent) var(--fill)
   );
 }
 
 input[type='range']::-moz-range-track {
   height: 6px;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--c3) 18%, transparent);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
 
 input[type='range']::-moz-range-progress {
   height: 6px;
   border-radius: 3px;
-  background: var(--c2);
+  background: var(--accent);
 }
 
 input[type='range']::-webkit-slider-thumb {
@@ -233,8 +244,8 @@ input[type='range']::-webkit-slider-thumb {
   margin-top: -8px;
   border: 0;
   border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
-  background: var(--c3);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--c0) 70%, transparent);
+  background: var(--ink);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 input[type='range']::-moz-range-thumb {
@@ -242,8 +253,161 @@ input[type='range']::-moz-range-thumb {
   height: 22px;
   border: 0;
   border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
-  background: var(--c3);
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--c0) 70%, transparent);
+  background: var(--ink);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+/* --- Palettes ---------------------------------------------------------- */
+
+.palettes {
+  padding: 12px 20px 0;
+}
+
+.palette-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.palette-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 36px));
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.swatch {
+  aspect-ratio: 1;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.swatch:hover {
+  transform: scale(1.08);
+}
+
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px var(--ink);
+}
+
+/* --- Save sheet -------------------------------------------------------- */
+
+.sheet {
+  position: fixed;
+  top: calc(max(10px, env(safe-area-inset-top)) + 60px);
+  left: var(--pad);
+  right: var(--pad);
+  padding: 14px 14px 14px;
+  border-radius: 26px;
+  background: var(--glass);
+  box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.2s;
+}
+
+.sheet.is-hidden {
+  transform: translateY(-12px) scale(0.98);
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (min-width: 720px) {
+  .sheet {
+    left: auto;
+    width: 360px;
+  }
+}
+
+.sheet-title {
+  margin: 0 6px 12px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.size-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.size-option {
+  --progress: 0%;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 12px 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+
+/* Progress fills the button from the left while the image is made. */
+.size-option::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: var(--progress);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  transition: width 0.2s;
+}
+
+.size-option > * {
+  position: relative;
+}
+
+.size-option:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.size-option:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.size-frame {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+}
+
+.size-shape {
+  box-sizing: border-box;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+}
+
+.size-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.size-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hint {
@@ -260,7 +424,7 @@ input[type='range']::-moz-range-thumb {
 /* --- Focus & motion ---------------------------------------------------- */
 
 :focus-visible {
-  outline: 2px solid var(--c3);
+  outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -271,6 +435,10 @@ input[type='range']:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .panel,
+  .sheet,
+  .swatch,
+  .size-option,
+  .size-option::before,
   .hint,
   .chip,
   .icon-btn {

@@ -5,6 +5,8 @@ import { isValidSeed } from './rng';
 export interface AppState {
   pattern: string;
   seed: string;
+  /** Palette id. */
+  palette: string;
   params: ParamValues;
 }
 
@@ -14,12 +16,13 @@ export interface PatternSchema {
   params: readonly ParamSpec[];
 }
 
-const RESERVED = new Set(['p', 'seed']);
+const RESERVED = new Set(['p', 'seed', 'pal']);
 
 export function encodeState(state: AppState, schema: PatternSchema): string {
   const q = new URLSearchParams();
   q.set('p', state.pattern);
   q.set('seed', state.seed);
+  q.set('pal', state.palette);
   for (const spec of schema.params) {
     if (RESERVED.has(spec.key)) continue;
     const v = state.params[spec.key];
@@ -30,18 +33,21 @@ export function encodeState(state: AppState, schema: PatternSchema): string {
 
 /**
  * Read state from a query string. Unknown patterns fall back to the first one,
- * bad seeds are replaced with `newSeed()`, and parameters are clamped.
+ * bad seeds are replaced with `newSeed()`, unknown palettes fall back to the
+ * first one, and parameters are clamped.
  */
 export function decodeState(
   search: string,
   patterns: readonly PatternSchema[],
+  palettes: readonly { id: string }[],
   newSeed: () => string,
 ): AppState {
   const q = new URLSearchParams(search);
   const schema = patterns.find((p) => p.id === q.get('p')) ?? patterns[0];
   const seedRaw = q.get('seed');
   const seed = seedRaw && isValidSeed(seedRaw) ? seedRaw : newSeed();
+  const palette = (palettes.find((p) => p.id === q.get('pal')) ?? palettes[0]).id;
   const raw: Record<string, string> = {};
   for (const [k, v] of q) raw[k] = v;
-  return { pattern: schema.id, seed, params: sanitizeValues(schema.params, raw) };
+  return { pattern: schema.id, seed, palette, params: sanitizeValues(schema.params, raw) };
 }

@@ -1,0 +1,280 @@
+import { hexToRgb } from '../../logic/color';
+import { FrameGovernor, StepAccumulator } from '../../logic/governor';
+import {
+  fromFeedKill,
+  gridSize,
+  seedField,
+  stepsPerFrame,
+  toFeedKill,
+  type GridSize,
+} from '../../logic/grayScott';
+import type { ParamSpec, ParamValues } from '../../logic/params';
+import { mulberry32 } from '../../logic/rng';
+import type { Palette } from '../../palettes';
+import {
+  createProgram,
+  createTarget,
+  deleteTarget,
+  FULLSCREEN_VS,
+  pickFloatFormat,
+  type FloatFormat,
+  type Program,
+  type RenderTarget,
+} from '../gl';
+import {
+  UnsupportedError,
+  type Pattern,
+  type PatternInstance,
+  type PatternOptions,
+  type Point,
+  type Preset,
+} from '../types';
+import { BRUSH_FS, DISPLAY_FS, RESAMPLE_FS, STEP_FS } from './shaders';
+
+/**
+ * Model parameters for each look, picked by sweeping the Gray-Scott map and
+ * watching each candidate grow (see src/logic/grayScott.ts).
+ */
+const LOOKS: { id: string; name: string; feed: number; kill: number }[] = [
+  { id: 'leopard', name: 'Leopard', feed: 0.022, kill: 0.05666 }, // irregular spots, a few rosettes
+  { id: 'zebra', name: 'Zebra', feed: 0.0276, kill: 0.057 }, // long, mostly parallel stripes
+  { id: 'coral', name: 'Coral', feed: 0.0545, kill: 0.062 }, // branching fronts that fill in
+  { id: 'maze', name: 'Maze', feed: 0.0468, kill: 0.06037 }, // dense winding labyrinth
+  { id: 'cells', name: 'Cells', feed: 0.0367, kill: 0.0649 }, // spots that keep dividing
+];
+
+const PRESETS: Preset[] = LOOKS.map(({ id, name, feed, kill }) => {
+  const { food, fade } = fromFeedKill(feed, kill);
+  return { id, name, values: { food: round3(food), fade: round3(fade) } };
+});
+
+const PARAMS: ParamSpec[] = [
+  { key: 'speed', label: 'Growth speed', min: 1, max: 10, step: 1, default: 5 },
+  { key: 'scale', label: 'Pattern size', min: 1, max: 4, step: 0.1, default: 2 },
+  { key: 'food', label: 'Food', min: 0, max: 1, step: 0.001, default: PRESETS[2].values.food },
+  { key: 'fade', label: 'Fade', min: 0, max: 1, step: 0.001, default: PRESETS[2].values.fade },
+];
+
+/** Radius of a painted stroke, in CSS pixels. */
+const BRUSH_RADIUS_CSS = 12;
+
+export const turing: Pattern = {
+  id: 'turing',
+  name: 'Turing',
+  params: PARAMS,
+  presets: PRESETS,
+  create: (options) => new TuringInstance(options),
+};
+
+class TuringInstance implements PatternInstance {
+  private readonly gl: WebGL2RenderingContext;
+  private readonly format: FloatFormat;
+  private readonly vao: WebGLVertexArrayObject;
+  private readonly stepProg: Program;
+  private readonly brushProg: Program;
+  private readonly resampleProg: Program;
+  private readonly displayProg: Program;
+
+  /** Ping-pong pair; `targets[current]` holds the latest state. */
+  private targets: [RenderTarget, RenderTarget] | null = null;
+  private current = 0;
+  private grid: GridSize | null = null;
+
+  private cssWidth = 0;
+  private cssHeight = 0;
+  private seed: number;
+  private params: ParamValues;
+  private feedKill = { feed: 0, kill: 0 };
+  private readonly colors = new Float32Array(12);
+  private readonly governor = new FrameGovernor();
+  private readonly accumulator = new StepAccumulator();
+  private strokes: [Point, Point][] = [];
+  private strokeCount = 0;
+
+  constructor({ canvas, seed, params, palette }: PatternOptions) {
+    const gl = canvas.getContext('webgl2', {
+      alpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: false,
+      powerPreference: 'high-performance',
+    });
+    if (!gl) throw new UnsupportedError('WebGL2 is not available');
+    const format = pickFloatFormat(gl);
+    if (!format) throw new UnsupportedError('Float render targets are not available');
+    this.gl = gl;
+    this.format = format;
+    this.vao = gl.createVertexArray()!;
+    this.stepProg = createProgram(gl, FULLSCREEN_VS, STEP_FS, ['uState', 'uTexel', 'uFeedKill']);
+    this.brushProg = createProgram(gl, FULLSCREEN_VS, BRUSH_FS, [
+      'uState', 'uTexel', 'uSeg', 'uRadius', 'uSalt',
+    ]);
+    this.resampleProg = createProgram(gl, FULLSCREEN_VS, RESAMPLE_FS, [
+      'uSrc', 'uSrcSize', 'uDstTexel',
+    ]);
+    this.displayProg = createProgram(gl, FULLSCREEN_VS, DISPLAY_FS, [
+      'uState', 'uSize', 'uResolution', 'uColors',
+    ]);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
+
+    this.seed = seed;
+    this.params = { ...params };
+    this.feedKill = toFeedKill(params.food, params.fade);
+    this.setPalette(palette);
+  }
+
+  resize(width: number, height: number, pixelRatio: number): void {
+    this.cssWidth = width / pixelRatio;
+    this.cssHeight = height / pixelRatio;
+    this.rebuildGrid();
+  }
+
+  setParams(params: ParamValues): void {
+    const scaleChanged = params.scale !== this.params.scale;
+    this.params = { ...params };
+    this.feedKill = toFeedKill(params.food, params.fade);
+    if (scaleChanged) this.rebuildGrid();
+  }
+
+  setPalette(palette: Palette): void {
+    palette.colors.forEach((hex, i) => this.colors.set(hexToRgb(hex), i * 3));
+  }
+
+  reset(seed: number): void {
+    this.seed = seed;
+    this.strokes = [];
+    if (this.targets && this.grid) this.upload(this.targets[this.current], this.grid);
+  }
+
+  paint(from: Point, to: Point): void {
+    this.strokes.push([from, to]);
+  }
+
+  step(dtMs: number): void {
+    const gl = this.gl;
+    if (!this.targets || !this.grid || gl.isContextLost()) return;
+    this.flushStrokes();
+    const budget = this.governor.update(dtMs);
+    const steps = this.accumulator.next(stepsPerFrame(this.params.speed), dtMs, budget);
+    if (steps === 0) return;
+
+    const { width, height } = this.grid;
+    const u = this.stepProg.uniforms;
+    gl.useProgram(this.stepProg.program);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform2f(u.uTexel, 1 / width, 1 / height);
+    gl.uniform2f(u.uFeedKill, this.feedKill.feed, this.feedKill.kill);
+    gl.viewport(0, 0, width, height);
+    for (let i = 0; i < steps; i++) this.pass();
+  }
+
+  render(): void {
+    const gl = this.gl;
+    if (!this.targets || !this.grid || gl.isContextLost()) return;
+    this.flushStrokes();
+    const u = this.displayProg.uniforms;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.useProgram(this.displayProg.program);
+    gl.bindTexture(gl.TEXTURE_2D, this.targets[this.current].texture);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform2f(u.uSize, this.grid.width, this.grid.height);
+    gl.uniform2f(u.uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.uniform3fv(u.uColors, this.colors);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  dispose(): void {
+    const gl = this.gl;
+    if (!gl.isContextLost()) {
+      if (this.targets) this.targets.forEach((t) => deleteTarget(gl, t));
+      for (const p of [this.stepProg, this.brushProg, this.resampleProg, this.displayProg]) {
+        gl.deleteProgram(p.program);
+      }
+      gl.deleteVertexArray(this.vao);
+    }
+    this.targets = null;
+    // Hand GPU memory back right away rather than waiting for GC.
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+
+  /** One full-grid pass: read targets[current], write the other, then swap. */
+  private pass(): void {
+    const gl = this.gl;
+    const src = this.targets![this.current];
+    const dst = this.targets![1 - this.current];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.framebuffer);
+    gl.bindTexture(gl.TEXTURE_2D, src.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this.current = 1 - this.current;
+  }
+
+  private flushStrokes(): void {
+    if (this.strokes.length === 0 || !this.targets || !this.grid) return;
+    const gl = this.gl;
+    const { width, height, cellSize } = this.grid;
+    const u = this.brushProg.uniforms;
+    gl.useProgram(this.brushProg.program);
+    gl.uniform1i(u.uState, 0);
+    gl.uniform2f(u.uTexel, 1 / width, 1 / height);
+    gl.uniform1f(u.uRadius, Math.max(2, BRUSH_RADIUS_CSS / cellSize));
+    gl.viewport(0, 0, width, height);
+    for (const [a, b] of this.strokes) {
+      // Normalized canvas space has y down; textures have y up.
+      gl.uniform4f(u.uSeg, a.x * width, (1 - a.y) * height, b.x * width, (1 - b.y) * height);
+      gl.uniform1ui(u.uSalt, this.strokeCount++ & 0xffff);
+      this.pass();
+    }
+    this.strokes = [];
+  }
+
+  /** (Re)allocate the grid for the current viewport and pattern size, keeping what has grown. */
+  private rebuildGrid(): void {
+    if (this.cssWidth <= 0 || this.cssHeight <= 0 || this.gl.isContextLost()) return;
+    const next = gridSize(this.cssWidth, this.cssHeight, this.params.scale);
+    const prev = this.grid;
+    this.grid = next;
+    if (prev && this.targets && prev.width === next.width && prev.height === next.height) return;
+
+    const gl = this.gl;
+    const fresh: [RenderTarget, RenderTarget] = [
+      createTarget(gl, this.format, next.width, next.height),
+      createTarget(gl, this.format, next.width, next.height),
+    ];
+    if (this.targets && prev) {
+      const u = this.resampleProg.uniforms;
+      gl.useProgram(this.resampleProg.program);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fresh[0].framebuffer);
+      gl.bindTexture(gl.TEXTURE_2D, this.targets[this.current].texture);
+      gl.viewport(0, 0, next.width, next.height);
+      gl.uniform1i(u.uSrc, 0);
+      gl.uniform2f(u.uSrcSize, prev.width, prev.height);
+      gl.uniform2f(u.uDstTexel, 1 / next.width, 1 / next.height);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      this.targets.forEach((t) => deleteTarget(gl, t));
+      this.targets = fresh;
+      this.current = 0;
+    } else {
+      this.targets = fresh;
+      this.current = 0;
+      this.upload(fresh[0], next);
+    }
+  }
+
+  private upload(target: RenderTarget, grid: GridSize): void {
+    const gl = this.gl;
+    const data = seedField(grid.width, grid.height, mulberry32(this.seed));
+    gl.bindTexture(gl.TEXTURE_2D, target.texture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.width, grid.height, gl.RG, gl.FLOAT, data);
+  }
+}
+
+function round3(x: number): number {
+  return Math.round(x * 1000) / 1000;
+}

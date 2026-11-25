@@ -76,10 +76,15 @@ export const MAX_CELLS = 1_000_000;
  * cell covering `cellSize` CSS pixels. The grid is coarser than the screen;
  * the display shader smooths it back up.
  */
-export function gridSize(cssWidth: number, cssHeight: number, cellSize: number): GridSize {
+export function gridSize(
+  cssWidth: number,
+  cssHeight: number,
+  cellSize: number,
+  maxCells = MAX_CELLS,
+): GridSize {
   let size = Math.max(1, cellSize);
   const cells = (cssWidth / size) * (cssHeight / size);
-  if (cells > MAX_CELLS) size *= Math.sqrt(cells / MAX_CELLS);
+  if (cells > maxCells) size *= Math.sqrt(cells / maxCells);
   return {
     width: Math.max(8, Math.round(cssWidth / size)),
     height: Math.max(8, Math.round(cssHeight / size)),
@@ -178,7 +183,8 @@ export interface ExportGrid {
  * Plan an export of outWidth × outHeight pixels from a screen grid that
  * covers a cssWidth × cssHeight view. The view is fitted like CSS
  * `object-fit: cover`; the export grid is finer than the screen's, so the
- * pattern is regrown with real detail rather than upscaled.
+ * pattern is regrown with real detail rather than upscaled. `maxCells` caps
+ * the export grid (lower for the CPU, which is far slower than a GPU).
  */
 export function exportGrid(
   cssWidth: number,
@@ -186,6 +192,7 @@ export function exportGrid(
   screen: { width: number; height: number },
   outWidth: number,
   outHeight: number,
+  maxCells = EXPORT_MAX_CELLS,
 ): ExportGrid {
   const fit = coverFit(cssWidth, cssHeight, outWidth, outHeight).scale;
   const cellsPerCssX = screen.width / cssWidth;
@@ -194,7 +201,7 @@ export function exportGrid(
   const screenCellPx = fit / Math.sqrt(cellsPerCssX * cellsPerCssY);
   // Never coarser than the screen, unless the cell cap demands it.
   let cellPx = Math.min(EXPORT_CELL_PX, screenCellPx);
-  cellPx = Math.max(cellPx, Math.sqrt((outWidth * outHeight) / EXPORT_MAX_CELLS));
+  cellPx = Math.max(cellPx, Math.sqrt((outWidth * outHeight) / maxCells));
   const width = Math.max(8, Math.round(outWidth / cellPx));
   const height = Math.max(8, Math.round(outHeight / cellPx));
   const refine = screenCellPx / cellPx;

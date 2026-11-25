@@ -34,6 +34,7 @@ import {
   createTarget,
   deleteTarget,
   FULLSCREEN_VS,
+  probeWebGL2,
   readTiles,
   waitForGpu,
   type FloatFormat,
@@ -50,7 +51,24 @@ import {
   type Point,
   type Preset,
 } from '../types';
+import { CpuSlimeInstance } from './cpu';
 import { AGENT_FS, DEPOSIT_FS, DEPOSIT_VS, DIFFUSE_FS, DISPLAY_FS, RESAMPLE_FS, SPAWN_FS } from './shaders';
+import {
+  DIFFUSE,
+  EXPOSURE,
+  FOOD_DOT_CSS,
+  FOOD_PEAK,
+  FOOD_PULL,
+  FOOD_RADIUS_CSS,
+  FOOD_REACH_CSS,
+  FOOD_SPACING_CSS,
+  foodStrength,
+  MIN_BUDGET,
+  SENSE_CAP,
+  STEP_TRIM_BELOW,
+  STEPS_PER_FRAME,
+  TRAIL_MAX,
+} from './tuning';
 
 const PARAMS: ParamSpec[] = [
   { key: 'agents', label: 'Explorers', min: 20, max: 1000, step: 10, default: 300, format: formatAgents },
@@ -108,38 +126,6 @@ const EXPLORE: ExploreRules = {
   start: { jitter: 0 },
 };
 
-/** Simulation steps per 60 Hz frame. Explorers walk one map cell per step. */
-const STEPS_PER_FRAME = 2;
-/** Below this budget the governor also trims steps, not just explorers. */
-const STEP_TRIM_BELOW = 0.35;
-/**
- * Feelers can't tell trail apart above this (a multiple of the map's
- * average): where a crowd piles up, the trail feels flat and explorers
- * drift out along the veins again, rather than collapsing into a blob.
- */
-const SENSE_CAP = 1.5;
-/** Most trail a cell can hold, to keep half floats in range. */
-const TRAIL_MAX = 200;
-/**
- * Share of each cell's trail that spreads to its neighbors per step. Low,
- * so veins stay crisp instead of haloed (halo width ≈ √(DIFFUSE / decay)).
- */
-const DIFFUSE = 0.15;
-/** Trail (averaging 1 over the map) → color: 1 − exp(−trail · EXPOSURE). */
-const EXPOSURE = 0.16;
-/**
- * Food: how strongly it glows in the trail (a multiple of the average), how
- * far off explorers feel it and how hard it pulls (beside SENSE_CAP), the
- * dot's size, and how fast it appears.
- */
-const FOOD_PEAK = 10;
-const FOOD_RADIUS_CSS = 4;
-const FOOD_REACH_CSS = 30;
-const FOOD_PULL = 1.2;
-const FOOD_DOT_CSS = 4.5;
-const FOOD_FADE_STEPS = 40;
-/** Dragging drops food this far apart, in CSS pixels. */
-const FOOD_SPACING_CSS = 40;
 /** Export work per frame, in explorer steps, so the page stays responsive. */
 const EXPORT_AGENT_STEPS_PER_FRAME = 10_000_000;
 /** Exports are drawn and read back in tiles no bigger than this. */
@@ -154,8 +140,45 @@ export const physarum: Pattern = {
   // A small crowd: the preview runs beside the real thing.
   thumbnail: { zoom: 2, params: { agents: 30 } },
   hint: 'Tap to drop food. The network will find its way to it.',
-  create: (options) => new PhysarumInstance(options),
+  create(options) {
+    if (gpuReady()) {
+      try {
+        return new PhysarumInstance(options);
+      } catch (err) {
+        if (!(err instanceof UnsupportedError)) throw err;
+      }
+    }
+    // No WebGL2 (or no float textures): a smaller crowd on the CPU.
+    return new CpuSlimeInstance(options);
+  },
 };
+
+let gpu: boolean | undefined;
+/** Whether this browser can run the GPU version (checked once). */
+function gpuReady(): boolean {
+  return (gpu ??= probeWebGL2((gl) => slimeFormats(gl) !== null));
+}
+
+interface SlimeFormats {
+  agents: FloatFormat;
+  trail: FloatFormat;
+  /** Full-float trails: blendable and filterable 32-bit. */
+  full: boolean;
+}
+
+/** Texture formats for explorers and trail on this device, or null if it can't run the GPU version. */
+function slimeFormats(gl: WebGL2RenderingContext): SlimeFormats | null {
+  if (!gl.getExtension('EXT_color_buffer_float')) return null;
+  const agents = { internalFormat: gl.RGBA32F, label: 'RGBA32F' };
+  if (!canRenderTo(gl, agents)) return null;
+  // Full floats where they can be blended and filtered; half floats otherwise.
+  const full = { internalFormat: gl.R32F, label: 'R32F' };
+  const half = { internalFormat: gl.R16F, label: 'R16F' };
+  if (!!gl.getExtension('EXT_float_blend') && !!gl.getExtension('OES_texture_float_linear') && canRenderTo(gl, full)) {
+    return { agents, trail: full, full: true };
+  }
+  return canRenderTo(gl, half) ? { agents, trail: half, full: false } : null;
+}
 
 /** Explorer states, ping-ponged; `targets[cur]` is the latest. */
 interface Crowd {
@@ -224,7 +247,7 @@ class PhysarumInstance implements PatternInstance {
   private readonly foodPixels = new Float32Array(MAX_FOOD * 4);
   private frame = 0;
   private exporting = false;
-  private readonly governor = new FrameGovernor();
+  private readonly governor = new FrameGovernor(MIN_BUDGET);
   private readonly accumulator = new StepAccumulator();
 
   constructor({ canvas, seed, params, palette }: PatternOptions) {
@@ -238,21 +261,13 @@ class PhysarumInstance implements PatternInstance {
       powerPreference: 'high-performance',
     });
     if (!gl) throw new UnsupportedError('WebGL2 is not available');
-    if (!gl.getExtension('EXT_color_buffer_float')) throw new UnsupportedError('Float render targets are not available');
-    const agentFormat = { internalFormat: gl.RGBA32F, label: 'RGBA32F' };
-    if (!canRenderTo(gl, agentFormat)) throw new UnsupportedError('Float render targets are not available');
-    // Full floats where they can be blended and filtered; half floats otherwise.
-    const full = { internalFormat: gl.R32F, label: 'R32F' };
-    const half = { internalFormat: gl.R16F, label: 'R16F' };
-    const fullOk =
-      !!gl.getExtension('EXT_float_blend') && !!gl.getExtension('OES_texture_float_linear') && canRenderTo(gl, full);
-    const trailFormat = fullOk ? full : half;
-    if (!fullOk && !canRenderTo(gl, half)) throw new UnsupportedError('Float render targets are not available');
+    const formats = slimeFormats(gl);
+    if (!formats) throw new UnsupportedError('Float render targets are not available');
 
     this.gl = gl;
-    this.agentFormat = agentFormat;
-    this.trailFormat = trailFormat;
-    this.minDecay = fullOk ? DECAY_MIN : DECAY_MIN_HALF_FLOAT;
+    this.agentFormat = formats.agents;
+    this.trailFormat = formats.trail;
+    this.minDecay = formats.full ? DECAY_MIN : DECAY_MIN_HALF_FLOAT;
     this.vao = gl.createVertexArray()!;
     this.agentProg = createProgram(gl, FULLSCREEN_VS, AGENT_FS, [
       'uAgents', 'uTrail', 'uGrid', 'uAngle', 'uReach', 'uTurn', 'uSpeed', 'uFrame', 'uBounce', 'uCap',
@@ -708,9 +723,4 @@ class PhysarumInstance implements PatternInstance {
   private agentTarget(grid: AgentGrid): RenderTarget {
     return createTarget(this.gl, this.agentFormat, grid.width, grid.rows);
   }
-}
-
-/** Food fades in over its first few steps. */
-function foodStrength(f: Food): number {
-  return Math.min(1, f.age / FOOD_FADE_STEPS);
 }

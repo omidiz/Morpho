@@ -49,8 +49,10 @@ export interface PatternInstance {
   /**
    * Draw the current pattern afresh at exactly width × height pixels (not an
    * upscale of the screen) and resolve with a canvas holding the image. The
-   * view is fitted like CSS `object-fit: cover`. Simulations may keep running
-   * for a moment at the new resolution so the detail is real.
+   * view is fitted like CSS `object-fit: cover`, unless the pattern can lay
+   * itself out afresh for the image's shape (plants are refitted so none is
+   * cut off). Simulations may keep running for a moment at the new
+   * resolution so the detail is real.
    */
   renderImage(width: number, height: number, options?: ExportOptions): Promise<HTMLCanvasElement>;
   /** Paint along a stroke from `from` to `to` (a tap has from === to). */
@@ -65,6 +67,8 @@ export interface Pattern {
   /** The UI builds one slider per entry, in this order. */
   params: readonly ParamSpec[];
   presets: readonly Preset[];
+  /** A short tip shown under the controls, e.g. that the pattern can be touched. */
+  hint?: string;
   /**
    * How "Randomize" varies each parameter, kept to ranges that look good.
    * Parameters left out keep their current value.

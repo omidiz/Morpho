@@ -1,9 +1,10 @@
 import type { WallpaperSize } from '../logic/export';
-import type { ParamValues } from '../logic/params';
+import type { ParamSpec, ParamValues } from '../logic/params';
 import { rampStops, type Palette } from '../palettes';
 import type { Pattern, Preset } from '../patterns/types';
 
 export interface ControlHandlers {
+  onPattern(pattern: Pattern): void;
   onParam(key: string, value: number): void;
   onPreset(preset: Preset): void;
   onPalette(palette: Palette): void;
@@ -16,6 +17,7 @@ export interface ControlHandlers {
 }
 
 export interface ControlOptions {
+  patterns: readonly Pattern[];
   pattern: Pattern;
   values: ParamValues;
   palettes: readonly Palette[];
@@ -30,6 +32,8 @@ export type SaveStatus =
   | { state: 'failed' };
 
 export interface Controls {
+  /** Show the presets and sliders of another pattern, set to `values`. */
+  setPattern(pattern: Pattern, values: ParamValues): void;
   /** Reflect new values in the sliders and preset chips. */
   setValues(values: ParamValues): void;
   setPlaying(playing: boolean): void;
@@ -69,15 +73,15 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 /**
- * Builds the controls for one pattern inside `root`: a top bar with
- * play/pause, restart, save and a panel toggle; a dock with undo, a big
- * Randomize button and share; a panel with preset chips, palette swatches and
- * one slider per parameter in the pattern's schema; and a "Save wallpaper"
- * sheet with one button per size.
+ * Builds the controls inside `root`: a top bar with play/pause, restart,
+ * save and a panel toggle; a dock with undo, a big Randomize button and
+ * share; a panel with a pattern picker, the pattern's preset chips, palette
+ * swatches and one control per parameter in its schema (a slider, or a
+ * switch); and a "Save wallpaper" sheet with one button per size.
  */
 export function buildControls(
   root: HTMLElement,
-  { pattern, values, palettes, palette, sizes }: ControlOptions,
+  { patterns, pattern, values, palettes, palette, sizes }: ControlOptions,
   handlers: ControlHandlers,
 ): Controls {
   const playBtn = el('button', { className: 'icon-btn', type: 'button' });
@@ -114,14 +118,48 @@ export function buildControls(
     el('div', { className: 'transport' }, [playBtn, restartBtn, saveBtn, panelBtn]),
   ]);
 
-  const chips = pattern.presets.map((preset) => {
-    const chip = el('button', { className: 'chip', type: 'button' }, [preset.name]);
-    chip.addEventListener('click', () => handlers.onPreset(preset));
-    return { preset, chip };
+  const tabs = patterns.map((p) => {
+    const tab = el('button', { className: 'tab', type: 'button' }, [p.name]);
+    tab.addEventListener('click', () => {
+      if (p.id !== current.id) handlers.onPattern(p);
+    });
+    return { pattern: p, tab };
   });
-  const presetRow = el('div', { className: 'presets' }, chips.map((c) => c.chip));
+  const tabRow = el('div', { className: 'tabs' }, tabs.map((t) => t.tab));
+  tabRow.setAttribute('role', 'group');
+  tabRow.setAttribute('aria-label', 'Pattern');
+  tabRow.hidden = patterns.length < 2;
+
+  const presetRow = el('div', { className: 'presets' });
   presetRow.setAttribute('role', 'group');
   presetRow.setAttribute('aria-label', 'Looks');
+  const sliderBox = el('div', { className: 'sliders' });
+  const hint = el('p', { className: 'hint' });
+
+  let current = pattern;
+  let chips: { preset: Preset; chip: HTMLButtonElement }[] = [];
+  let inputs: ParamControl[] = [];
+
+  /** Fill the pattern-specific parts of the panel. */
+  const showPattern = (p: Pattern) => {
+    current = p;
+    for (const { pattern: q, tab } of tabs) tab.setAttribute('aria-pressed', String(q.id === p.id));
+    chips = p.presets.map((preset) => {
+      const chip = el('button', { className: 'chip', type: 'button' }, [preset.name]);
+      chip.addEventListener('click', () => handlers.onPreset(preset));
+      return { preset, chip };
+    });
+    presetRow.replaceChildren(...chips.map((c) => c.chip));
+    presetRow.hidden = chips.length === 0;
+    inputs = p.params
+      .filter((spec) => spec.control !== 'hidden')
+      .map((spec) => (spec.control === 'switch' ? switchControl(spec, handlers) : sliderControl(spec, handlers)));
+    sliderBox.replaceChildren(...inputs.map((c) => c.row));
+    hint.textContent = p.hint ?? '';
+    hint.hidden = !p.hint;
+    hint.classList.remove('is-gone');
+  };
+  showPattern(pattern);
 
   const paletteName = el('span', { className: 'palette-name' });
   const swatches = palettes.map((p) => {
@@ -150,30 +188,11 @@ export function buildControls(
     swatchRow,
   ]);
 
-  const sliders = pattern.params.map((spec) => {
-    const input = el('input', {
-      type: 'range',
-      min: String(spec.min),
-      max: String(spec.max),
-      step: String(spec.step),
-      id: `param-${spec.key}`,
-    });
-    input.addEventListener('input', () => {
-      paintFill(input);
-      handlers.onParam(spec.key, Number(input.value));
-    });
-    const row = el('div', { className: 'slider' }, [
-      el('label', { htmlFor: input.id }, [spec.label]),
-      input,
-    ]);
-    return { spec, input, row };
-  });
-
-  const hint = el('p', { className: 'hint' }, ['Touch the pattern to plant new seeds.']);
   const panel = el('section', { className: 'panel', id: 'panel' }, [
+    tabRow,
     presetRow,
     paletteSection,
-    el('div', { className: 'sliders' }, sliders.map((s) => s.row)),
+    sliderBox,
     hint,
   ]);
   panel.setAttribute('aria-label', 'Pattern controls');
@@ -253,11 +272,12 @@ export function buildControls(
   let spins = 0;
 
   const controls: Controls = {
+    setPattern(p, next) {
+      showPattern(p);
+      controls.setValues(next);
+    },
     setValues(next) {
-      for (const { spec, input } of sliders) {
-        input.value = String(next[spec.key]);
-        paintFill(input);
-      }
+      for (const c of inputs) c.set(next[c.spec.key]);
       for (const { preset, chip } of chips) {
         const active = Object.entries(preset.values).every(([k, v]) => next[k] === v);
         chip.classList.toggle('is-active', active);
@@ -331,6 +351,56 @@ export function buildControls(
   controls.setPlaying(true);
   controls.setCanUndo(false);
   return controls;
+}
+
+/** One row in the panel for one parameter. */
+interface ParamControl {
+  spec: ParamSpec;
+  row: HTMLElement;
+  set(value: number): void;
+}
+
+function sliderControl(spec: ParamSpec, handlers: ControlHandlers): ParamControl {
+  const input = el('input', {
+    type: 'range',
+    min: String(spec.min),
+    max: String(spec.max),
+    step: String(spec.step),
+    id: `param-${spec.key}`,
+  });
+  input.addEventListener('input', () => {
+    paintFill(input);
+    handlers.onParam(spec.key, Number(input.value));
+  });
+  const row = el('div', { className: 'slider' }, [el('label', { htmlFor: input.id }, [spec.label]), input]);
+  return {
+    spec,
+    row,
+    set(value) {
+      input.value = String(value);
+      paintFill(input);
+    },
+  };
+}
+
+/** An on/off switch for a parameter that is 0 or 1 (min and max). */
+function switchControl(spec: ParamSpec, handlers: ControlHandlers): ParamControl {
+  const button = el('button', { className: 'switch', type: 'button', id: `param-${spec.key}` });
+  button.setAttribute('role', 'switch');
+  button.append(el('span', { className: 'switch-knob' }));
+  button.addEventListener('click', () => {
+    const on = button.getAttribute('aria-checked') !== 'true';
+    button.setAttribute('aria-checked', String(on));
+    handlers.onParam(spec.key, on ? spec.max : spec.min);
+  });
+  const row = el('div', { className: 'slider' }, [el('label', { htmlFor: button.id }, [spec.label]), button]);
+  return {
+    spec,
+    row,
+    set(value) {
+      button.setAttribute('aria-checked', String(value === spec.max));
+    },
+  };
 }
 
 /** A diagonal sample of the palette: mostly background, then a band of each color. */

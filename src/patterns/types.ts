@@ -74,8 +74,17 @@ export interface Pattern {
    * Parameters left out keep their current value.
    */
   explore: ExploreRules;
+  /** How the little live preview in the pattern switcher is set up. */
+  thumbnail?: ThumbnailOptions;
   /** Throws UnsupportedError if this device can't run the pattern. */
   create(options: PatternOptions): PatternInstance;
+}
+
+export interface ThumbnailOptions {
+  /** Show this many times more of the pattern than at full size, so a tiny tile still shows its texture. */
+  zoom?: number;
+  /** Values that keep the preview light, e.g. a smaller crowd. They override the pattern's own. */
+  params?: ParamValues;
 }
 
 /** Thrown by Pattern.create when the browser lacks something it needs. */

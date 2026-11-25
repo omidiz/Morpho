@@ -147,8 +147,9 @@ RNG staying exactly as they are; `src/logic/rng.test.ts` pins their output.
   (`randomizeState` in `src/logic/randomize.ts`): a random preset, nudged
   within each pattern's `explore` rules so it stays in the region that looks
   good, and a different palette. Sliders without a rule (like speed, growth
-  steps, forest or the number of explorers) are left alone. For Spirals, Randomize stays within about
-  a degree of the golden angle (or of the galaxy's).
+  steps, forest or the number of explorers) are left alone. For Spirals,
+  Randomize stays within about a degree of the golden angle (or of the
+  galaxy's).
 - **Switching patterns** keeps the seed and palette; each pattern remembers
   its own sliders for the session.
 - **Undo** steps back through the last 20 randomizes, switching pattern back

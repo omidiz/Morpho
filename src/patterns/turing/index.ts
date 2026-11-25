@@ -18,6 +18,8 @@ import {
   deleteTarget,
   FULLSCREEN_VS,
   pickFloatFormat,
+  readTiles,
+  waitForGpu,
   type FloatFormat,
   type Program,
   type RenderTarget,
@@ -230,7 +232,6 @@ class TuringInstance implements PatternInstance {
       createTarget(gl, this.format, grid.width, grid.height),
     ];
     const tileSize = Math.min(EXPORT_TILE, maxSize);
-    const tile = createTarget(gl, { internalFormat: gl.RGBA8, label: 'RGBA8' }, tileSize, tileSize);
     try {
       // 1. Copy the visible part of the screen grid onto the finer grid.
       const r = this.resampleProg.uniforms;
@@ -263,38 +264,21 @@ class TuringInstance implements PatternInstance {
       }
 
       // 3. Draw through the palette, tile by tile, into a 2D canvas.
-      const out = document.createElement('canvas');
-      out.width = width;
-      out.height = height;
-      const ctx = out.getContext('2d')!;
-      const pixels = new Uint8Array(tileSize * tileSize * 4);
-      const tiles = Math.ceil(width / tileSize) * Math.ceil(height / tileSize);
-      let drawn = 0;
-      for (let y0 = 0; y0 < height; y0 += tileSize) {
-        for (let x0 = 0; x0 < width; x0 += tileSize) {
-          const tw = Math.min(tileSize, width - x0);
-          const th = Math.min(tileSize, height - y0);
-          gl.bindFramebuffer(gl.FRAMEBUFFER, tile.framebuffer);
-          gl.viewport(0, 0, tw, th);
+      return readTiles(
+        gl,
+        width,
+        height,
+        tileSize,
+        (x0, y0) => {
           this.useDisplay(sim[cur], grid, width, height, EMBOSS * plan.refine);
           gl.uniform2f(this.displayProg.uniforms.uOffset, x0, y0);
           gl.drawArrays(gl.TRIANGLES, 0, 3);
-          gl.readPixels(0, 0, tw, th, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-          // GL rows run bottom-up; images run top-down.
-          const img = ctx.createImageData(tw, th);
-          for (let row = 0; row < th; row++) {
-            const src = (th - 1 - row) * tw * 4;
-            img.data.set(pixels.subarray(src, src + tw * 4), row * tw * 4);
-          }
-          ctx.putImageData(img, x0, height - y0 - th);
-          onProgress?.(0.9 + 0.1 * (++drawn / tiles));
-        }
-      }
-      return out;
+        },
+        (f) => onProgress?.(0.9 + 0.1 * f),
+      );
     } finally {
       if (!gl.isContextLost()) {
         sim.forEach((t) => deleteTarget(gl, t));
-        deleteTarget(gl, tile);
       }
       this.exporting = false;
     }
@@ -411,23 +395,6 @@ class TuringInstance implements PatternInstance {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, grid.width, grid.height, gl.RG, gl.FLOAT, data);
   }
-}
-
-/** Resolves once the GPU has finished the work queued so far (checked once per frame). */
-function waitForGpu(gl: WebGL2RenderingContext): Promise<void> {
-  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-  gl.flush();
-  return new Promise((resolve) => {
-    const check = () => {
-      if (!sync || gl.isContextLost() || gl.getSyncParameter(sync, gl.SYNC_STATUS) === gl.SIGNALED) {
-        if (sync && !gl.isContextLost()) gl.deleteSync(sync);
-        resolve();
-      } else {
-        requestAnimationFrame(check);
-      }
-    };
-    requestAnimationFrame(check);
-  });
 }
 
 function round3(x: number): number {

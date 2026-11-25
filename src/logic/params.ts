@@ -6,6 +6,12 @@ export interface ParamSpec {
   max: number;
   step: number;
   default: number;
+  /**
+   * How the UI shows it: a slider (the default), an on/off switch (for 0/1
+   * values), or nothing at all, for values only presets set (they still
+   * live in the URL).
+   */
+  control?: 'slider' | 'switch' | 'hidden';
 }
 
 export type ParamValues = Record<string, number>;

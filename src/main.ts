@@ -2,13 +2,14 @@ import './style.css';
 import { chromeColors } from './logic/color';
 import { exportFileName, WALLPAPER_SIZES, type WallpaperSize } from './logic/export';
 import { UndoStack } from './logic/history';
+import { defaultValues, type ParamValues } from './logic/params';
 import { randomizeState } from './logic/randomize';
 import { hashSeed, makeSeed } from './logic/rng';
 import { shareLink, type ShareEnv } from './logic/share';
 import { decodeState, encodeState, type AppState } from './logic/urlState';
 import { findPalette, PALETTES, type Palette } from './palettes';
 import { findPattern, PATTERNS } from './patterns';
-import { UnsupportedError, type PatternInstance, type Point } from './patterns/types';
+import { UnsupportedError, type Pattern, type PatternInstance, type Point } from './patterns/types';
 import { buildControls } from './ui/controls';
 
 /** Device pixels per CSS pixel, capped: beyond 2× the extra pixels cost more than they show. */
@@ -18,7 +19,7 @@ const stage = document.querySelector<HTMLElement>('#stage')!;
 const ui = document.querySelector<HTMLElement>('#ui')!;
 
 const state: AppState = decodeState(location.search, PATTERNS, PALETTES, () => makeSeed());
-const pattern = findPattern(state.pattern);
+let pattern = findPattern(state.pattern);
 let palette: Palette = findPalette(state.palette);
 
 let canvas: HTMLCanvasElement | null = null;
@@ -29,13 +30,22 @@ let urlTimer = 0;
 let saving = false;
 /** States from before each Randomize, newest last. */
 const undoStack = new UndoStack<AppState>(20);
+/** Slider values of the patterns visited this session, so switching back finds them as they were. */
+const paramsByPattern = new Map<string, ParamValues>();
 
 applyPaletteToPage(palette);
 
 const controls = buildControls(
   ui,
-  { pattern, values: state.params, palettes: PALETTES, palette, sizes: WALLPAPER_SIZES },
+  { patterns: PATTERNS, pattern, values: state.params, palettes: PALETTES, palette, sizes: WALLPAPER_SIZES },
   {
+    onPattern(next) {
+      paramsByPattern.set(pattern.id, { ...state.params });
+      state.pattern = next.id;
+      state.params = paramsByPattern.get(next.id) ?? defaultValues(next.params);
+      showPattern(next);
+      saveUrl();
+    },
     onParam(key, value) {
       state.params[key] = value;
       instance?.setParams(state.params);
@@ -69,10 +79,20 @@ const controls = buildControls(
   },
 );
 
+/** Switch the controls and the canvas over to `next`, using the current state. */
+function showPattern(next: Pattern): void {
+  pattern = next;
+  controls.setPattern(next, state.params);
+  mount();
+  if (!playing) togglePlay(); // a fresh start is only seeds until it grows
+  dirty = true;
+}
+
 function mount(): void {
   instance?.dispose();
   canvas?.remove();
   instance = null;
+  stage.querySelector('.unsupported')?.remove();
 
   const c = document.createElement('canvas');
   canvas = c;
@@ -99,6 +119,8 @@ function mount(): void {
     showUnsupported();
     return;
   }
+  // Only patterns you can paint on get the crosshair.
+  c.style.cursor = instance.paint ? '' : 'default';
   sizeCanvas();
 }
 
@@ -199,20 +221,28 @@ function snapshot(): AppState {
   return { ...state, params: { ...state.params } };
 }
 
-/** Show `next` (same pattern): new params, palette and seed, regrown from the start. */
+/** Show `next`: its pattern, params, palette and seed, regrown from the start. */
 function applyState(next: AppState): void {
+  const switching = next.pattern !== pattern.id;
+  if (switching) paramsByPattern.set(pattern.id, { ...state.params });
   state.seed = next.seed;
   state.params = { ...next.params };
   palette = findPalette(next.palette);
   state.palette = palette.id;
-  instance?.setParams(state.params);
-  instance?.setPalette(palette);
-  instance?.reset(hashSeed(state.seed));
-  controls.setValues(state.params);
   controls.setPalette(palette);
   applyPaletteToPage(palette);
-  if (!playing) togglePlay(); // a fresh start is only seeds until it grows
-  dirty = true;
+  if (switching) {
+    // Undo can lead back to a pattern from before a switch.
+    state.pattern = next.pattern;
+    showPattern(findPattern(next.pattern));
+  } else {
+    instance?.setParams(state.params);
+    instance?.setPalette(palette);
+    instance?.reset(hashSeed(state.seed));
+    controls.setValues(state.params);
+    if (!playing) togglePlay(); // a fresh start is only seeds until it grows
+    dirty = true;
+  }
   saveUrl();
 }
 
@@ -279,8 +309,7 @@ function applyPaletteToPage(p: Palette): void {
 function showUnsupported(): void {
   const note = document.createElement('p');
   note.className = 'unsupported';
-  note.textContent =
-    'This pattern needs a browser with WebGL2. Try the latest Chrome, Safari, Firefox or Edge.';
+  note.textContent = `${pattern.name} needs a browser with WebGL2. Try the latest Chrome, Safari, Firefox or Edge, or pick another pattern.`;
   stage.append(note);
 }
 

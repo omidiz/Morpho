@@ -240,6 +240,13 @@ body {
   border-radius: 26px;
   background: var(--glass);
   box-shadow: 0 10px 40px -12px color-mix(in srgb, var(--bg) 80%, black);
+  /* On short screens, scroll rather than cover the top bar and the dock above. */
+  max-height: calc(
+    100dvh - max(14px, env(safe-area-inset-bottom)) - max(10px, env(safe-area-inset-top)) - 150px
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   transition:
     transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 0.24s;
@@ -254,7 +261,54 @@ body {
   .panel {
     right: auto;
     width: 360px;
+    /* The dock sits beside the panel here, so only the top bar needs room. */
+    max-height: calc(
+      100dvh - max(14px, env(safe-area-inset-bottom)) - max(10px, env(safe-area-inset-top)) - 72px
+    );
   }
+}
+
+/* Hidden rows stay hidden even where a rule gives them a display. */
+[hidden] {
+  display: none !important;
+}
+
+/* Pattern picker: a soft segmented control at the top of the panel. */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 16px 12px;
+  padding: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  flex: 1 0 auto;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  color: var(--text);
 }
 
 .presets {
@@ -363,6 +417,37 @@ input[type='range']::-moz-range-thumb {
   border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
   background: var(--ink);
   box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+/* On/off switch, in a slider row. */
+.switch {
+  justify-self: end;
+  width: 52px;
+  height: 30px;
+  padding: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.switch-knob {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 52% 48% 46% 54% / 55% 50% 50% 45%;
+  background: var(--ink);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--bg) 70%, transparent);
+  transition: transform 0.22s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+
+.switch[aria-checked='true'] {
+  background: var(--accent);
+}
+
+.switch[aria-checked='true'] .switch-knob {
+  transform: translateX(22px);
 }
 
 /* --- Palettes ---------------------------------------------------------- */
@@ -549,6 +634,9 @@ input[type='range']:focus-visible {
   .size-option::before,
   .hint,
   .chip,
+  .tab,
+  .switch,
+  .switch-knob,
   .icon-btn,
   .dock,
   .randomize,

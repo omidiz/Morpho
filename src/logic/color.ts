@@ -22,19 +22,33 @@ export function contrast(a: string, b: string): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-/** Colors for the app's own buttons and text, picked from a palette. */
-export interface ChromeColors {
-  /** Page and panel background. */
-  bg: string;
-  /** Text and icons: the palette color that stands out most from the background. */
-  ink: string;
-  /** Slider fill: the next most visible color. */
+/**
+ * The app's own controls sit on one quiet dark surface whatever the palette,
+ * so they never compete with the art. Only the accent comes from the palette.
+ */
+export const UI_SURFACE = '#111316';
+/** Neutral text and icons on the surface. */
+export const UI_INK = '#ecebe6';
+
+/** Accents for the app's own controls, picked from a palette. */
+export interface UiColors {
+  /** Randomize button, selected things: the palette color that stands out most on the surface. */
   accent: string;
+  /** Slider fill: the next most visible color, if it still shows up well. */
+  soft: string;
 }
 
-export function chromeColors(background: string, colors: readonly string[]): ChromeColors {
-  const ranked = [...colors].sort((a, b) => contrast(b, background) - contrast(a, background));
-  return { bg: background, ink: ranked[0], accent: ranked[1] ?? ranked[0] };
+/** Below this, a color is lost on the dark surface (WCAG's figure for UI parts). */
+const MIN_UI_CONTRAST = 3;
+
+export function uiColors(colors: readonly string[], surface = UI_SURFACE): UiColors {
+  const ranked = [...colors].sort((a, b) => contrast(b, surface) - contrast(a, surface));
+  let accent = ranked[0];
+  // A palette of dark inks only: lift its brightest toward white until it reads.
+  for (let t = 0.1; contrast(accent, surface) < 7 && t <= 1; t += 0.1) accent = mixHex(ranked[0], '#ffffff', t);
+  const second = ranked[1];
+  const soft = second && contrast(second, surface) >= MIN_UI_CONTRAST ? second : accent;
+  return { accent, soft };
 }
 
 /** Blend from `a` (t = 0) to `b` (t = 1), as "#rrggbb". */

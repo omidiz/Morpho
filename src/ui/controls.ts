@@ -1,5 +1,6 @@
 import type { WallpaperSize } from '../logic/export';
 import type { ParamSpec, ParamValues } from '../logic/params';
+import { openness, settlesOpen } from '../logic/sheet';
 import { rampStops, type Palette } from '../palettes';
 import type { Pattern, Preset } from '../patterns/types';
 
@@ -14,6 +15,10 @@ export interface ControlHandlers {
   onRandomize(): void;
   onUndo(): void;
   onShare(): void;
+  /** The panel (and with it the pattern switcher) was opened or closed. */
+  onPanel(open: boolean): void;
+  /** The first-visit tip went away, so it needn't show again. */
+  onWelcomeDone(): void;
 }
 
 export interface ControlOptions {
@@ -32,6 +37,10 @@ export type SaveStatus =
   | { state: 'failed' };
 
 export interface Controls {
+  /** Whether the panel, with its pattern switcher, is showing. */
+  readonly panelOpen: boolean;
+  /** Where the live thumbnail of `pattern` goes in the switcher. */
+  thumbSlot(pattern: Pattern): HTMLElement;
   /** Show the presets and sliders of another pattern, set to `values`. */
   setPattern(pattern: Pattern, values: ParamValues): void;
   /** Reflect new values in the sliders and preset chips. */
@@ -48,6 +57,9 @@ export interface Controls {
   toast(message: string): void;
   /** A little spin of the dice, also for the keyboard shortcut. */
   spinDice(): void;
+  /** The first-visit tip by the Randomize button. */
+  showWelcome(): void;
+  dismissWelcome(): void;
   destroy(): void;
 }
 
@@ -72,63 +84,73 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** Phones get a bottom sheet; from this width up the panel is a card at the left. */
+const WIDE = '(min-width: 720px)';
+/** Where the card starts open. Shorter screens (a phone on its side) show the art first. */
+const ROOMY = '(min-width: 720px) and (min-height: 560px)';
+
 /**
- * Builds the controls inside `root`: a top bar with play/pause, restart,
- * save and a panel toggle; a dock with undo, a big Randomize button and
- * share; a panel with a pattern picker, the pattern's preset chips, palette
+ * Builds the controls inside `root`: a top bar with play/pause, restart and
+ * save; a dock with undo, a big Randomize button and share; a panel with
+ * live thumbnails to switch pattern, the pattern's preset chips, palette
  * swatches and one control per parameter in its schema (a slider, a switch
- * or a row of choices); and a "Save wallpaper" sheet with one button per size.
+ * or a row of choices); and a "Save wallpaper" menu with one button per size.
+ *
+ * On phones the panel is a bottom sheet that rests closed, showing only the
+ * dock, and is pulled up by its handle. On wider screens it is a card at
+ * the left that the button by the wordmark folds away.
  */
 export function buildControls(
   root: HTMLElement,
   { patterns, pattern, values, palettes, palette, sizes }: ControlOptions,
   handlers: ControlHandlers,
 ): Controls {
-  const playBtn = el('button', { className: 'icon-btn', type: 'button' });
-  const restartBtn = el('button', { className: 'icon-btn', type: 'button', title: 'Start over' });
-  restartBtn.innerHTML = ICONS.restart;
-  restartBtn.setAttribute('aria-label', 'Start over with new seeds');
-  const panelBtn = el('button', { className: 'icon-btn', type: 'button', title: 'Controls' });
-  panelBtn.innerHTML = ICONS.sliders;
-  panelBtn.setAttribute('aria-label', 'Show controls');
-  panelBtn.setAttribute('aria-controls', 'panel');
-  const saveBtn = el('button', { className: 'icon-btn', type: 'button', title: 'Save wallpaper' });
-  saveBtn.innerHTML = ICONS.save;
-  saveBtn.setAttribute('aria-label', 'Save wallpaper');
-  saveBtn.setAttribute('aria-controls', 'save-sheet');
+  const wide = matchMedia(WIDE);
 
-  const undoBtn = el('button', { className: 'icon-btn dock-btn', type: 'button', title: 'Undo (Z)' });
-  undoBtn.innerHTML = ICONS.undo;
-  undoBtn.setAttribute('aria-label', 'Undo randomize');
+  const playBtn = iconButton('', 'icon-btn');
+  const restartBtn = iconButton(ICONS.restart, 'icon-btn', 'Start over with new seeds', 'Start over (R)');
+  const saveBtn = iconButton(ICONS.save, 'icon-btn', 'Save wallpaper', 'Save wallpaper');
+  saveBtn.setAttribute('aria-controls', 'save-menu');
+  const panelBtn = iconButton(ICONS.sliders, 'icon-btn panel-btn', 'Hide controls', 'Controls');
+  panelBtn.setAttribute('aria-controls', 'panel');
+
+  const undoBtn = iconButton(ICONS.undo, 'icon-btn dock-btn', 'Undo randomize', 'Undo (Z)');
   const randomBtn = el('button', { className: 'randomize', type: 'button', title: 'Randomize (Space)' });
   randomBtn.innerHTML = ICONS.dice;
   randomBtn.append(el('span', {}, ['Randomize']));
-  const shareBtn = el('button', { className: 'icon-btn dock-btn', type: 'button', title: 'Share' });
-  shareBtn.innerHTML = ICONS.share;
-  shareBtn.setAttribute('aria-label', 'Share a link to this pattern');
+  const shareBtn = iconButton(ICONS.share, 'icon-btn dock-btn', 'Share a link to this pattern', 'Share');
   const toastEl = el('p', { className: 'toast' });
   toastEl.setAttribute('role', 'status');
+  const welcome = el('button', { className: 'welcome', type: 'button', hidden: true }, [
+    'Tap Randomize, then save what you love',
+  ]);
+  welcome.setAttribute('aria-label', 'Tip: tap Randomize, then save what you love. Dismiss');
   const dock = el('div', { className: 'dock' }, [
-    toastEl,
+    el('div', { className: 'dock-notes' }, [welcome, toastEl]),
     el('div', { className: 'dock-row' }, [undoBtn, randomBtn, shareBtn]),
   ]);
 
   const bar = el('header', { className: 'bar' }, [
-    el('span', { className: 'wordmark' }, ['morpho']),
-    el('div', { className: 'transport' }, [playBtn, restartBtn, saveBtn, panelBtn]),
+    el('div', { className: 'bar-group' }, [el('span', { className: 'wordmark' }, ['morpho']), panelBtn]),
+    el('div', { className: 'bar-group transport' }, [playBtn, restartBtn, saveBtn]),
   ]);
 
-  const tabs = patterns.map((p) => {
-    const tab = el('button', { className: 'tab', type: 'button' }, [p.name]);
-    tab.addEventListener('click', () => {
+  // --- Pattern switcher: a live thumbnail per pattern ---------------------
+  const tiles = patterns.map((p) => {
+    const art = el('span', { className: 'thumb-art' });
+    const tile = el('button', { className: 'thumb', type: 'button' }, [
+      art,
+      el('span', { className: 'thumb-name' }, [p.name]),
+    ]);
+    tile.addEventListener('click', () => {
       if (p.id !== current.id) handlers.onPattern(p);
     });
-    return { pattern: p, tab };
+    return { pattern: p, tile, art };
   });
-  const tabRow = el('div', { className: 'tabs' }, tabs.map((t) => t.tab));
-  tabRow.setAttribute('role', 'group');
-  tabRow.setAttribute('aria-label', 'Pattern');
-  tabRow.hidden = patterns.length < 2;
+  const switcher = el('div', { className: 'switcher' }, tiles.map((t) => t.tile));
+  switcher.setAttribute('role', 'group');
+  switcher.setAttribute('aria-label', 'Pattern');
+  switcher.hidden = patterns.length < 2;
 
   const presetRow = el('div', { className: 'presets' });
   presetRow.setAttribute('role', 'group');
@@ -139,33 +161,6 @@ export function buildControls(
   let current = pattern;
   let chips: { preset: Preset; chip: HTMLButtonElement }[] = [];
   let inputs: ParamControl[] = [];
-
-  /** Fill the pattern-specific parts of the panel. */
-  const showPattern = (p: Pattern) => {
-    current = p;
-    for (const { pattern: q, tab } of tabs) tab.setAttribute('aria-pressed', String(q.id === p.id));
-    chips = p.presets.map((preset) => {
-      const chip = el('button', { className: 'chip', type: 'button' }, [preset.name]);
-      chip.addEventListener('click', () => handlers.onPreset(preset));
-      return { preset, chip };
-    });
-    presetRow.replaceChildren(...chips.map((c) => c.chip));
-    presetRow.hidden = chips.length === 0;
-    inputs = p.params
-      .filter((spec) => spec.control !== 'hidden')
-      .map((spec) =>
-        spec.control === 'switch'
-          ? switchControl(spec, handlers)
-          : spec.control === 'choice'
-            ? choiceControl(spec, handlers)
-            : sliderControl(spec, handlers),
-      );
-    sliderBox.replaceChildren(...inputs.map((c) => c.row));
-    hint.textContent = p.hint ?? '';
-    hint.hidden = !p.hint;
-    hint.classList.remove('is-gone');
-  };
-  showPattern(pattern);
 
   const paletteName = el('span', { className: 'palette-name' });
   const swatches = palettes.map((p) => {
@@ -190,42 +185,131 @@ export function buildControls(
     handlers.onPalette(next.palette);
   });
   const paletteSection = el('div', { className: 'palettes' }, [
-    el('div', { className: 'palette-head' }, [el('span', {}, ['Colors']), paletteName]),
+    el('div', { className: 'section-head' }, [el('span', {}, ['Colors']), paletteName]),
     swatchRow,
   ]);
 
-  const panel = el('section', { className: 'panel', id: 'panel' }, [
-    tabRow,
+  /** Fill the pattern-specific parts of the panel. */
+  const showPattern = (p: Pattern) => {
+    const switching = p !== current;
+    current = p;
+    for (const { pattern: q, tile } of tiles) tile.setAttribute('aria-pressed', String(q.id === p.id));
+    chips = p.presets.map((preset) => {
+      const chip = el('button', { className: 'chip', type: 'button' }, [preset.name]);
+      chip.addEventListener('click', () => handlers.onPreset(preset));
+      return { preset, chip };
+    });
+    presetRow.replaceChildren(...chips.map((c) => c.chip));
+    presetRow.hidden = chips.length === 0;
+    inputs = p.params
+      .filter((spec) => spec.control !== 'hidden')
+      .map((spec) =>
+        spec.control === 'switch'
+          ? switchControl(spec, handlers)
+          : spec.control === 'choice'
+            ? choiceControl(spec, handlers)
+            : sliderControl(spec, handlers),
+      );
+    sliderBox.replaceChildren(...inputs.map((c) => c.row));
+    hint.textContent = p.hint ?? '';
+    hint.hidden = !p.hint;
+    hint.classList.remove('is-gone');
+    if (switching) {
+      // Restart the settle-in animation of the new controls.
+      body.classList.remove('is-entering');
+      void body.offsetWidth;
+      body.classList.add('is-entering');
+    }
+  };
+  // --- Panel: bottom sheet on phones, side card on wide screens ------------
+  const grip = el('button', { className: 'grip', type: 'button' }, [el('span', { className: 'grip-bar' })]);
+  grip.setAttribute('aria-controls', 'panel-body');
+  const head = el('div', { className: 'panel-head' }, [grip]);
+  const body = el('div', { className: 'panel-body', id: 'panel-body' }, [
+    switcher,
     presetRow,
     paletteSection,
     sliderBox,
     hint,
   ]);
+  showPattern(pattern);
+  const panel = el('section', { className: 'panel', id: 'panel' }, [head, body]);
   panel.setAttribute('aria-label', 'Pattern controls');
 
-  let panelOpen = true;
-  // On phones the dock rides on top of the panel and drops down when it hides.
-  const liftDock = () => {
-    const lift = panelOpen ? panel.offsetHeight + 12 : 0;
-    dock.style.setProperty('--lift', `${lift}px`);
-  };
-  new ResizeObserver(liftDock).observe(panel);
-  const setPanel = (open: boolean) => {
-    panelOpen = open;
-    liftDock();
-    panel.classList.toggle('is-hidden', !open);
-    panel.inert = !open;
-    panelBtn.setAttribute('aria-expanded', String(open));
-    panelBtn.setAttribute('aria-label', open ? 'Hide controls' : 'Show controls');
-  };
-  setPanel(true);
+  let panelOpen = matchMedia(ROOMY).matches;
+  /** Distance the sheet moves down to close, leaving the dock showing. */
+  let closedOffset = 0;
+  let dragging = false;
 
+  const placeSheet = (offset: number) => {
+    panel.style.setProperty('--offset', `${offset}px`);
+    panel.style.setProperty('--open', String(openness(offset, closedOffset)));
+  };
+  const measureSheet = () => {
+    if (wide.matches) return;
+    const padBottom = parseFloat(getComputedStyle(panel).paddingBottom) || 0;
+    closedOffset = Math.max(0, panel.offsetHeight - body.offsetTop - padBottom);
+    if (!dragging) placeSheet(panelOpen ? 0 : closedOffset);
+  };
+
+  const setPanel = (open: boolean) => {
+    const changed = open !== panelOpen;
+    panelOpen = open;
+    panel.classList.toggle('is-closed', !open);
+    body.inert = !open;
+    if (wide.matches) {
+      panel.inert = !open;
+      panel.style.removeProperty('--offset');
+      panel.style.removeProperty('--open');
+    } else {
+      panel.inert = false; // the dock rides in its head
+      measureSheet();
+    }
+    for (const b of [panelBtn, grip]) b.setAttribute('aria-expanded', String(open));
+    panelBtn.setAttribute('aria-label', open ? 'Hide controls' : 'Show controls');
+    grip.setAttribute('aria-label', open ? 'Hide controls' : 'Show controls');
+    if (changed) handlers.onPanel(open);
+  };
+
+  // The dock lives in the sheet's head on phones and in a corner on wide screens.
+  const layout = () => {
+    if (wide.matches) root.append(dock);
+    else head.append(dock);
+    setPanel(panelOpen);
+  };
+  wide.addEventListener('change', () => {
+    // Each layout starts in its natural state: sheet closed, card open where there's room.
+    panelOpen = matchMedia(ROOMY).matches;
+    layout();
+    handlers.onPanel(panelOpen);
+  });
+  new ResizeObserver(measureSheet).observe(panel);
+
+  grip.addEventListener('click', () => setPanel(!panelOpen));
+  panelBtn.addEventListener('click', () => setPanel(!panelOpen));
+  attachSheetDrag(head, {
+    canDrag: () => !wide.matches,
+    start() {
+      dragging = true;
+      panel.classList.add('is-dragging');
+      return panelOpen ? 0 : closedOffset;
+    },
+    move: (offset) => placeSheet(Math.min(closedOffset, Math.max(0, offset))),
+    end(offset, velocity) {
+      dragging = false;
+      panel.classList.remove('is-dragging');
+      setPanel(settlesOpen(offset, closedOffset, velocity));
+      measureSheet();
+    },
+  });
+
+  // --- Save menu ----------------------------------------------------------
   const options = sizes.map((size) => {
     const status = el('span', { className: 'size-status' }, [`${size.width} × ${size.height}`]);
     const shape = el('span', { className: 'size-shape' });
     const aspect = size.width / size.height;
-    shape.style.width = `${Math.round(36 * Math.min(1, aspect))}px`;
-    shape.style.height = `${Math.round(36 * Math.min(1, 1 / aspect))}px`;
+    shape.style.width = `${Math.round(30 * Math.min(1, aspect))}px`;
+    shape.style.height = `${Math.round(30 * Math.min(1, 1 / aspect))}px`;
     const button = el('button', { className: 'size-option', type: 'button' }, [
       el('span', { className: 'size-frame' }, [shape]),
       el('span', { className: 'size-name' }, [size.name]),
@@ -234,50 +318,71 @@ export function buildControls(
     button.addEventListener('click', () => handlers.onSave(size));
     return { size, button, status };
   });
-  const sheet = el('section', { className: 'sheet is-hidden', id: 'save-sheet' }, [
-    el('h2', { className: 'sheet-title' }, ['Save wallpaper']),
+  const saveMenu = el('section', { className: 'save-menu is-hidden', id: 'save-menu' }, [
+    el('h2', { className: 'save-title' }, ['Save wallpaper']),
     el('div', { className: 'size-options' }, options.map((o) => o.button)),
   ]);
-  sheet.setAttribute('aria-label', 'Save wallpaper');
-  let sheetOpen = false;
+  saveMenu.setAttribute('aria-label', 'Save wallpaper');
+  let menuOpen = false;
   let saving = false;
-  const setSheet = (open: boolean) => {
+  const setMenu = (open: boolean) => {
     if (!open && saving) return; // stay put until the save finishes
-    sheetOpen = open;
-    sheet.classList.toggle('is-hidden', !open);
-    sheet.inert = !open;
+    menuOpen = open;
+    saveMenu.classList.toggle('is-hidden', !open);
+    saveMenu.inert = !open;
     saveBtn.setAttribute('aria-expanded', String(open));
   };
-  setSheet(false);
+  setMenu(false);
   saveBtn.addEventListener('click', () => {
-    setSheet(!sheetOpen);
-    if (sheetOpen) options[0].button.focus();
+    setMenu(!menuOpen);
+    if (menuOpen) {
+      dismissWelcome();
+      options[0].button.focus();
+    }
   });
   document.addEventListener('pointerdown', (e) => {
     const t = e.target as Node;
-    if (sheetOpen && !sheet.contains(t) && !saveBtn.contains(t)) setSheet(false);
+    if (menuOpen && !saveMenu.contains(t) && !saveBtn.contains(t)) setMenu(false);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && sheetOpen) {
-      setSheet(false);
+    if (e.key === 'Escape' && menuOpen) {
+      setMenu(false);
       saveBtn.focus();
     }
   });
 
+  // --- First-visit tip ----------------------------------------------------
+  let welcomeShown = false;
+  const dismissWelcome = () => {
+    if (!welcomeShown) return;
+    welcomeShown = false;
+    welcome.classList.remove('is-shown');
+    window.setTimeout(() => (welcome.hidden = true), 400);
+    handlers.onWelcomeDone();
+  };
+  welcome.addEventListener('click', dismissWelcome);
+
   playBtn.addEventListener('click', handlers.onTogglePlay);
   restartBtn.addEventListener('click', handlers.onRestart);
-  panelBtn.addEventListener('click', () => setPanel(!panelOpen));
   undoBtn.addEventListener('click', handlers.onUndo);
-  randomBtn.addEventListener('click', handlers.onRandomize);
+  randomBtn.addEventListener('click', () => {
+    handlers.onRandomize();
+  });
   shareBtn.addEventListener('click', handlers.onShare);
 
-  root.append(bar, sheet, panel, dock);
-  liftDock();
+  root.append(bar, panel, saveMenu);
+  layout();
 
   let toastTimer = 0;
   let spins = 0;
 
   const controls: Controls = {
+    get panelOpen() {
+      return panelOpen;
+    },
+    thumbSlot(p) {
+      return tiles.find((t) => t.pattern.id === p.id)!.art;
+    },
     setPattern(p, next) {
       showPattern(p);
       controls.setValues(next);
@@ -297,6 +402,7 @@ export function buildControls(
         swatch.setAttribute('aria-checked', String(on));
         swatch.tabIndex = on ? 0 : -1;
       }
+      for (const { art } of tiles) art.style.background = p.background;
     },
     setSaveStatus(size, status) {
       saving = status?.state === 'working';
@@ -345,9 +451,17 @@ export function buildControls(
       spins++;
       randomBtn.style.setProperty('--spin', `${spins * 180}deg`);
     },
+    showWelcome() {
+      if (welcomeShown) return;
+      welcomeShown = true;
+      welcome.hidden = false;
+      // Let the art show itself first.
+      window.setTimeout(() => welcomeShown && welcome.classList.add('is-shown'), 900);
+    },
+    dismissWelcome,
     destroy() {
       bar.remove();
-      sheet.remove();
+      saveMenu.remove();
       panel.remove();
       dock.remove();
     },
@@ -357,6 +471,92 @@ export function buildControls(
   controls.setPlaying(true);
   controls.setCanUndo(false);
   return controls;
+}
+
+function iconButton(icon: string, className: string, label = '', title = ''): HTMLButtonElement {
+  const button = el('button', { className, type: 'button' });
+  button.innerHTML = icon;
+  if (label) button.setAttribute('aria-label', label);
+  if (title) button.title = title;
+  return button;
+}
+
+interface SheetDrag {
+  canDrag(): boolean;
+  /** A drag has begun; returns the sheet's offset at the start. */
+  start(): number;
+  move(offset: number): void;
+  /** Let go at `offset`, moving at `velocity` px/ms (positive = down). */
+  end(offset: number, velocity: number): void;
+}
+
+/** Pixels a finger moves before a press on the head becomes a drag (and not a tap). */
+const DRAG_SLOP = 8;
+/** How far back a release looks to measure a flick. */
+const FLICK_WINDOW_MS = 120;
+
+/**
+ * Drag the sheet up and down by its head. A press on a button there stays
+ * a tap unless the finger moves; once it does, the sheet takes over and the
+ * button's click is dropped.
+ */
+function attachSheetDrag(head: HTMLElement, drag: SheetDrag): void {
+  let press: {
+    id: number;
+    y0: number;
+    from: number;
+    active: boolean;
+    offset: number;
+    samples: { y: number; t: number }[];
+  } | null = null;
+
+  /** The last press turned into a drag. */
+  let dragged = false;
+
+  head.addEventListener('pointerdown', (e) => {
+    dragged = false;
+    if (press || !drag.canDrag() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    press = { id: e.pointerId, y0: e.clientY, from: 0, active: false, offset: 0, samples: [] };
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    const dy = e.clientY - press.y0;
+    if (!press.active) {
+      if (Math.abs(dy) < DRAG_SLOP) return;
+      press.active = true;
+      dragged = true;
+      press.from = drag.start();
+      head.setPointerCapture(e.pointerId);
+    }
+    press.offset = press.from + dy;
+    press.samples.push({ y: e.clientY, t: e.timeStamp });
+    if (press.samples.length > 8) press.samples.shift();
+    drag.move(press.offset);
+  });
+  const finish = (e: PointerEvent) => {
+    if (!press || e.pointerId !== press.id) return;
+    const p = press;
+    press = null;
+    if (!p.active) return;
+    // Speed over the last moment only: a drag that stops before letting go is no flick.
+    const last = p.samples.at(-1)!;
+    const first = p.samples.find((s) => last.t - s.t <= FLICK_WINDOW_MS) ?? last;
+    const velocity = last.t > first.t ? (last.y - first.y) / (last.t - first.t) : 0;
+    drag.end(p.offset, velocity);
+  };
+  head.addEventListener('pointerup', finish);
+  head.addEventListener('pointercancel', finish);
+  // A drag that started on a button must not also press it.
+  head.addEventListener(
+    'click',
+    (e) => {
+      if (!dragged) return;
+      dragged = false;
+      e.stopPropagation();
+      e.preventDefault();
+    },
+    true,
+  );
 }
 
 /** One row in the panel for one parameter. */

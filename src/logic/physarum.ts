@@ -262,13 +262,14 @@ export function exportPlan(
   screenAgents: number,
   outWidth: number,
   outHeight: number,
+  { maxCells = EXPORT_MAX_CELLS, maxAgents = EXPORT_MAX_AGENTS, steps = EXPORT_STEPS } = {},
 ): ExportPlan {
   const fit = coverFit(cssWidth, cssHeight, outWidth, outHeight);
   const cellsPerCss = Math.sqrt((screen.width / cssWidth) * (screen.height / cssHeight));
   // Output pixels per screen cell.
   const screenCellPx = fit.scale / cellsPerCss;
   let cellPx = Math.min(EXPORT_CELL_PX, screenCellPx);
-  cellPx = Math.max(cellPx, Math.sqrt((outWidth * outHeight) / EXPORT_MAX_CELLS));
+  cellPx = Math.max(cellPx, Math.sqrt((outWidth * outHeight) / maxCells));
   const width = Math.max(16, Math.round(outWidth / cellPx));
   const height = Math.max(16, Math.round(outHeight / cellPx));
   const refine = screenCellPx / cellPx;
@@ -278,9 +279,9 @@ export function exportPlan(
   // Keep the crowd as dense as on screen: the crop's share, refine² times over.
   const wanted = screenAgents * span[0] * span[1] * Math.max(1, refine * refine);
   // Whole rows, never past the cap.
-  const cap = Math.floor(EXPORT_MAX_AGENTS / AGENT_ROW) * AGENT_ROW;
+  const cap = Math.max(AGENT_ROW, Math.floor(maxAgents / AGENT_ROW) * AGENT_ROW);
   const agents = agentGrid(Math.min(cap, Math.max(AGENT_ROW, wanted)));
-  return { width, height, refine, origin, span, agents, steps: EXPORT_STEPS };
+  return { width, height, refine, origin, span, agents, steps };
 }
 
 // --- Readouts -------------------------------------------------------------------

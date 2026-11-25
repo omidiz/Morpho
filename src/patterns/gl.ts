@@ -210,3 +210,21 @@ export function readTiles(
     if (!gl.isContextLost()) deleteTarget(gl, tile);
   }
 }
+
+/**
+ * Whether this browser can run a GPU pattern: makes a throwaway WebGL2
+ * context, runs `test` on it, and lets it go. A canvas can only ever hold
+ * one kind of context, so patterns ask this before choosing between their
+ * GPU and CPU versions, rather than trying WebGL2 on the real canvas first.
+ */
+export function probeWebGL2(test: (gl: WebGL2RenderingContext) => boolean): boolean {
+  let gl: WebGL2RenderingContext | null = null;
+  try {
+    gl = document.createElement('canvas').getContext('webgl2');
+    return !!gl && !gl.isContextLost() && test(gl);
+  } catch {
+    return false;
+  } finally {
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+}

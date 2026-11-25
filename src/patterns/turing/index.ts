@@ -18,6 +18,7 @@ import {
   deleteTarget,
   FULLSCREEN_VS,
   pickFloatFormat,
+  probeWebGL2,
   readTiles,
   waitForGpu,
   type FloatFormat,
@@ -34,7 +35,9 @@ import {
   type Point,
   type Preset,
 } from '../types';
+import { CpuTuringInstance } from './cpu';
 import { BRUSH_FS, DISPLAY_FS, RESAMPLE_FS, STEP_FS } from './shaders';
+import { BRUSH_RADIUS_CSS, EMBOSS } from './tuning';
 
 /**
  * Model parameters for each look, picked by sweeping the Gray-Scott map and
@@ -70,10 +73,6 @@ const EXPLORE: ExploreRules = {
   scale: { range: [1.4, 3.2] },
 };
 
-/** Radius of a painted stroke, in CSS pixels. */
-const BRUSH_RADIUS_CSS = 12;
-/** Strength of the surface shading, per screen cell. */
-const EMBOSS = 2.2;
 /** Export work per frame, in cell updates, so the page stays responsive. */
 const EXPORT_CELL_STEPS_PER_FRAME = 12_000_000;
 /** Exports are drawn and read back in tiles no bigger than this. */
@@ -87,8 +86,24 @@ export const turing: Pattern = {
   explore: EXPLORE,
   thumbnail: { zoom: 2.5 },
   hint: 'Touch the pattern to plant new seeds.',
-  create: (options) => new TuringInstance(options),
+  create(options) {
+    if (gpuReady()) {
+      try {
+        return new TuringInstance(options);
+      } catch (err) {
+        if (!(err instanceof UnsupportedError)) throw err;
+      }
+    }
+    // No WebGL2 (or no float textures): the same pattern, smaller, on the CPU.
+    return new CpuTuringInstance(options);
+  },
 };
+
+let gpu: boolean | undefined;
+/** Whether this browser can run the GPU version (checked once). */
+function gpuReady(): boolean {
+  return (gpu ??= probeWebGL2((gl) => pickFloatFormat(gl) !== null));
+}
 
 class TuringInstance implements PatternInstance {
   private readonly gl: WebGL2RenderingContext;

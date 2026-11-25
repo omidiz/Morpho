@@ -76,8 +76,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
  * Builds the controls inside `root`: a top bar with play/pause, restart,
  * save and a panel toggle; a dock with undo, a big Randomize button and
  * share; a panel with a pattern picker, the pattern's preset chips, palette
- * swatches and one control per parameter in its schema (a slider, or a
- * switch); and a "Save wallpaper" sheet with one button per size.
+ * swatches and one control per parameter in its schema (a slider, a switch
+ * or a row of choices); and a "Save wallpaper" sheet with one button per size.
  */
 export function buildControls(
   root: HTMLElement,
@@ -153,7 +153,13 @@ export function buildControls(
     presetRow.hidden = chips.length === 0;
     inputs = p.params
       .filter((spec) => spec.control !== 'hidden')
-      .map((spec) => (spec.control === 'switch' ? switchControl(spec, handlers) : sliderControl(spec, handlers)));
+      .map((spec) =>
+        spec.control === 'switch'
+          ? switchControl(spec, handlers)
+          : spec.control === 'choice'
+            ? choiceControl(spec, handlers)
+            : sliderControl(spec, handlers),
+      );
     sliderBox.replaceChildren(...inputs.map((c) => c.row));
     hint.textContent = p.hint ?? '';
     hint.hidden = !p.hint;
@@ -368,17 +374,67 @@ function sliderControl(spec: ParamSpec, handlers: ControlHandlers): ParamControl
     step: String(spec.step),
     id: `param-${spec.key}`,
   });
+  const readout = spec.format ? el('span', { className: 'readout' }) : null;
+  const show = (value: number) => {
+    if (!readout || !spec.format) return;
+    const text = spec.format(value);
+    readout.textContent = text;
+    input.setAttribute('aria-valuetext', text);
+  };
   input.addEventListener('input', () => {
     paintFill(input);
+    show(Number(input.value));
     handlers.onParam(spec.key, Number(input.value));
   });
-  const row = el('div', { className: 'slider' }, [el('label', { htmlFor: input.id }, [spec.label]), input]);
+  const label = el('label', { htmlFor: input.id }, [spec.label]);
+  if (readout) label.append(readout);
+  const row = el('div', { className: 'slider' }, [label, input]);
   return {
     spec,
     row,
     set(value) {
       input.value = String(value);
       paintFill(input);
+      show(value);
+    },
+  };
+}
+
+/** A row of named choices for a whole-number parameter (min…max). */
+function choiceControl(spec: ParamSpec, handlers: ControlHandlers): ParamControl {
+  const names = spec.options ?? [];
+  const buttons = names.map((name, i) => {
+    const value = spec.min + i;
+    const button = el('button', { className: 'choice', type: 'button' }, [name]);
+    button.setAttribute('role', 'radio');
+    button.addEventListener('click', () => {
+      if (button.getAttribute('aria-checked') !== 'true') handlers.onParam(spec.key, value);
+    });
+    return { value, button };
+  });
+  const group = el('div', { className: 'choices' }, buttons.map((b) => b.button));
+  group.setAttribute('role', 'radiogroup');
+  group.setAttribute('aria-label', spec.label);
+  group.addEventListener('keydown', (e) => {
+    // Arrow keys move between choices, as in any radio group.
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = buttons.findIndex((b) => b.button.getAttribute('aria-checked') === 'true');
+    const next = buttons[(i + step + buttons.length) % buttons.length];
+    next.button.focus();
+    handlers.onParam(spec.key, next.value);
+  });
+  const row = el('div', { className: 'slider choice-row' }, [el('span', { className: 'row-label' }, [spec.label]), group]);
+  return {
+    spec,
+    row,
+    set(value) {
+      for (const { value: v, button } of buttons) {
+        const on = v === value;
+        button.setAttribute('aria-checked', String(on));
+        button.tabIndex = on ? 0 : -1;
+      }
     },
   };
 }

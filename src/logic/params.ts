@@ -8,10 +8,15 @@ export interface ParamSpec {
   default: number;
   /**
    * How the UI shows it: a slider (the default), an on/off switch (for 0/1
-   * values), or nothing at all, for values only presets set (they still
-   * live in the URL).
+   * values), a row of named choices (for whole numbers min…max, one per
+   * entry in `options`), or nothing at all, for values only presets set
+   * (they still live in the URL).
    */
-  control?: 'slider' | 'switch' | 'hidden';
+  control?: 'slider' | 'switch' | 'choice' | 'hidden';
+  /** Names of the choices, for values min, min + 1, … max. */
+  options?: readonly string[];
+  /** A quiet readout of the value under the slider's label, e.g. "137.51°". */
+  format?(value: number): string;
 }
 
 export type ParamValues = Record<string, number>;

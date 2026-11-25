@@ -347,6 +347,7 @@ body {
 
 .sliders {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   padding: 10px 20px 0;
 }
@@ -359,9 +360,20 @@ body {
   min-height: 40px;
 }
 
-.slider label {
+.slider label,
+.row-label {
   font-size: 15px;
   color: var(--muted);
+}
+
+/* A quiet value under a slider's name, e.g. the spiral angle. */
+.readout {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0.8;
 }
 
 /* Range input: soft track with a filled part and a pebble thumb. */
@@ -448,6 +460,52 @@ input[type='range']::-moz-range-thumb {
 
 .switch[aria-checked='true'] .switch-knob {
   transform: translateX(22px);
+}
+
+/* A row of named choices, in a slider row: a small segmented control. */
+.choices {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.choice {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+/* Narrow phones: the choices go under their name, across the whole row. */
+@media (max-width: 379px) {
+  .choice-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+    padding: 4px 0;
+  }
+}
+
+.choice:hover {
+  color: var(--text);
+}
+
+.choice[aria-checked='true'] {
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  color: var(--text);
 }
 
 /* --- Palettes ---------------------------------------------------------- */
@@ -635,6 +693,7 @@ input[type='range']:focus-visible {
   .hint,
   .chip,
   .tab,
+  .choice,
   .switch,
   .switch-knob,
   .icon-btn,

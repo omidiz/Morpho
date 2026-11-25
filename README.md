@@ -20,14 +20,17 @@ npm run build    # type-check and build to dist/
 - `src/patterns/turing/`: Turing patterns (Gray-Scott reaction-diffusion) on
   the GPU with WebGL2 ping-pong float textures.
 - `src/patterns/plants/`: L-system plants drawn with Canvas 2D (see below).
+- `src/patterns/phyllotaxis/`: Spirals, sunflower-style seed heads drawn with
+  Canvas 2D (see below).
 - `src/ui/controls.ts`: builds the panel from a pattern's schema (a slider per
-  parameter, a switch for on/off ones, nothing for ones only presets set),
+  parameter, with an optional quiet value readout; a switch for on/off ones; a
+  row of named choices for ones like shape; nothing for ones only presets set),
   plus the pattern picker, preset chips, palette swatches, play/pause/restart,
   the Undo · Randomize · Share dock and the "Save wallpaper" sheet.
 - `src/logic/`: pure, tested logic: seeded RNG, URL state, randomize, undo
   history, share fallback, slider ↔ model mappings, frame governor, color
-  contrast, export sizing, and the L-system, plant species, forest layout and
-  growth timing behind the plants.
+  contrast, export sizing, the L-system, plant species, forest layout and
+  growth timing behind the plants, and the seed-head layout behind Spirals.
 - `src/palettes.ts`: palettes shared by all patterns. Each has a background
   and 3–5 colors the pattern is mapped across; the page's own colors are
   picked from it for contrast.
@@ -57,6 +60,35 @@ segments; wind then bends it, thin twigs more than the trunk.
 - **Export.** Plants are vector, so a wallpaper is laid out afresh for its
   shape (refitted, not cropped) and drawn fully grown.
 
+## Spirals
+
+Seed heads like a sunflower's (`src/logic/phyllotaxis.ts`): each seed turns
+by the same angle from the last and sits a little further out. At the golden
+angle (137.51°) the seeds pack evenly and Fibonacci spirals appear (21, 34,
+55, 89 arms as the head grows); any other angle breaks them into spokes or
+curved arms.
+
+- **Angle.** The slider has the golden angle in the middle and is finest
+  there, where a tenth of a degree already breaks the spirals; it sweeps
+  faster toward the ends (about 92° to 182°, past the 2, 3 and 5 arms of
+  180°, 120° and 144°). The angle is shown quietly under the slider's name.
+- **Size growth.** With none, seeds sit at radius ∝ √n and are all one size.
+  With growth, a seed's size goes as distance^k and the spacing widens to
+  match, so the head stays evenly packed: small seeds at the heart, large ones
+  at the rim.
+- **Shape and color.** Dots, petals (almonds pointing outward) or rings.
+  Color follows either the spiral arms (the family that stands out two
+  thirds of the way out, found by checking which seeds sit closest; arms are
+  colored in bands that wrap round without a seam) or the distance from the
+  center.
+- **Looks.** Sunflower, Pinecone, Daisy and Galaxy (an angle just off golden,
+  so the spirals sweep into curved arms).
+- **Seed.** Gives each head a turn and a little natural variation in seed
+  size and placement.
+- **Drawing.** Seeds are batched into one path per color, so even 3,000 of
+  them redraw within a frame on a phone while the head fills in from the
+  heart. Wallpapers are drawn afresh as vectors at full size.
+
 ## Exploring and sharing
 
 Everything that makes a pattern (pattern, seed, palette, every slider) lives
@@ -68,7 +100,8 @@ RNG staying exactly as they are; `src/logic/rng.test.ts` pins their output.
   (`randomizeState` in `src/logic/randomize.ts`): a random preset, nudged
   within each pattern's `explore` rules so it stays in the region that looks
   good, and a different palette. Sliders without a rule (like speed, growth
-  steps or forest) are left alone.
+  steps or forest) are left alone. For Spirals, Randomize stays within about
+  a degree of the golden angle (or of the galaxy's).
 - **Switching patterns** keeps the seed and palette; each pattern remembers
   its own sliders for the session.
 - **Undo** steps back through the last 20 randomizes, switching pattern back
@@ -91,7 +124,7 @@ RNG staying exactly as they are; `src/logic/rng.test.ts` pins their output.
 what is on screen, centered and trimmed to the wallpaper's shape.
 
 Each pattern implements `renderImage(width, height)`. Plants are redrawn as
-vectors for the wallpaper's shape. Turing patterns copy
+vectors for the wallpaper's shape, and seed heads are redrawn at full size. Turing patterns copy
 the screen's simulation onto a grid several times finer, then keep
 growing it there for a moment, with the reaction slowed by 1/refine² so the
 shapes keep their size instead of re-forming smaller

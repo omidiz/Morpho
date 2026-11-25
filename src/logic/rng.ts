@@ -38,3 +38,25 @@ export function makeSeed(rng: Rng = Math.random, length = 6): string {
 export function isValidSeed(seed: string): boolean {
   return /^[a-z0-9]{1,16}$/i.test(seed);
 }
+
+/**
+ * Combine two 32-bit values into a well-mixed 32-bit hash. Used to give
+ * things (plants in a forest, symbols in a plant) their own stable seed
+ * derived from a parent seed, without drawing from a shared sequence.
+ */
+export function mixSeed(a: number, b: number): number {
+  let h = (a ^ Math.imul((b + 0x9e3779b9) | 0, 0x85ebca6b)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+  h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** A number in [0, 1) fixed by `id` and `salt`. */
+export function unitHash(id: number, salt: number): number {
+  return mixSeed(id, salt) / 4294967296;
+}
+
+/** A number in [-1, 1) fixed by `id` and `salt`. */
+export function signedHash(id: number, salt: number): number {
+  return unitHash(id, salt) * 2 - 1;
+}

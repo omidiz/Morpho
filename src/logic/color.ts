@@ -36,3 +36,14 @@ export function chromeColors(background: string, colors: readonly string[]): Chr
   const ranked = [...colors].sort((a, b) => contrast(b, background) - contrast(a, background));
   return { bg: background, ink: ranked[0], accent: ranked[1] ?? ranked[0] };
 }
+
+/** Blend from `a` (t = 0) to `b` (t = 1), as "#rrggbb". */
+export function mixHex(a: string, b: string, t: number): string {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const k = Math.min(1, Math.max(0, t));
+  const hex = ca
+    .map((c, i) => Math.round((c + (cb[i] - c) * k) * 255).toString(16).padStart(2, '0'))
+    .join('');
+  return `#${hex}`;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hashSeed, isValidSeed, makeSeed, mulberry32 } from './rng';
+import { hashSeed, isValidSeed, makeSeed, mixSeed, mulberry32, signedHash, unitHash } from './rng';
 
 describe('mulberry32', () => {
   it('is deterministic for a seed', () => {
@@ -99,5 +99,29 @@ describe('makeSeed alphabet', () => {
   it('only uses readable characters (no 0/o, 1/l)', () => {
     const r = mulberry32(9);
     for (let i = 0; i < 200; i++) expect(makeSeed(r)).toMatch(/^[a-km-np-z2-9]{6}$/);
+  });
+});
+
+describe('mixSeed / unitHash', () => {
+  it('is stable, spreads nearby inputs apart and stays in range', () => {
+    expect(mixSeed(1, 2)).toBe(mixSeed(1, 2));
+    expect(mixSeed(1, 2)).not.toBe(mixSeed(2, 1));
+    expect(mixSeed(1, 2)).not.toBe(mixSeed(1, 3));
+    let sum = 0;
+    for (let i = 0; i < 10_000; i++) {
+      const u = unitHash(i, 99);
+      expect(u).toBeGreaterThanOrEqual(0);
+      expect(u).toBeLessThan(1);
+      const s = signedHash(i, 99);
+      expect(s).toBeGreaterThanOrEqual(-1);
+      expect(s).toBeLessThan(1);
+      sum += u;
+    }
+    expect(sum / 10_000).toBeCloseTo(0.5, 1);
+  });
+
+  // Plant shapes in shared links depend on these exact values.
+  it('keeps its exact output', () => {
+    expect([mixSeed(0, 0), mixSeed(1, 2), mixSeed(0xffffffff, 7)]).toEqual([1622709315, 1668479420, 877109393]);
   });
 });

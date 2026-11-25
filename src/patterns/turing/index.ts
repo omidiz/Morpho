@@ -24,6 +24,7 @@ import {
 } from '../gl';
 import {
   UnsupportedError,
+  type ExploreRules,
   type ExportOptions,
   type Pattern,
   type PatternInstance,
@@ -57,6 +58,16 @@ const PARAMS: ParamSpec[] = [
   { key: 'fade', label: 'Fade', min: 0, max: 1, step: 0.001, default: PRESETS[2].values.fade },
 ];
 
+/**
+ * Randomize: patterns only live in a thin band of the Food/Fade map, so stay
+ * close to one of the looks; any comfortable size; leave speed alone.
+ */
+const EXPLORE: ExploreRules = {
+  food: { jitter: 0.04 },
+  fade: { jitter: 0.06 },
+  scale: { range: [1.4, 3.2] },
+};
+
 /** Radius of a painted stroke, in CSS pixels. */
 const BRUSH_RADIUS_CSS = 12;
 /** Strength of the surface shading, per screen cell. */
@@ -71,6 +82,7 @@ export const turing: Pattern = {
   name: 'Turing',
   params: PARAMS,
   presets: PRESETS,
+  explore: EXPLORE,
   create: (options) => new TuringInstance(options),
 };
 

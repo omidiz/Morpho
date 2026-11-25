@@ -10,6 +10,9 @@ export interface ControlHandlers {
   onSave(size: WallpaperSize): void;
   onTogglePlay(): void;
   onRestart(): void;
+  onRandomize(): void;
+  onUndo(): void;
+  onShare(): void;
 }
 
 export interface ControlOptions {
@@ -35,6 +38,12 @@ export interface Controls {
   setSaveStatus(size: WallpaperSize, status: SaveStatus | null): void;
   /** Called once someone has painted, so the hint can go away. */
   dismissHint(): void;
+  /** Enable or disable the undo button. */
+  setCanUndo(canUndo: boolean): void;
+  /** A short message near the dock, read out by screen readers. */
+  toast(message: string): void;
+  /** A little spin of the dice, also for the keyboard shortcut. */
+  spinDice(): void;
   destroy(): void;
 }
 
@@ -43,6 +52,9 @@ const ICONS = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.6c0-1 1.1-1.6 1.9-1.1l9 6.4c.7.5.7 1.6 0 2.1l-9 6.4c-.8.6-1.9 0-1.9-1V5.6z"/></svg>',
   restart: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5"/><path d="M4.5 4.5v4h4"/></svg>',
   save: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10.5M7.5 10.5 12 15l4.5-4.5"/><path d="M5 16.5v1.5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1.5"/></svg>',
+  dice: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M7 3h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4zm1.2 3.4a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zm7.6 0a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM12 10.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zM8.2 14a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6zm7.6 0a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5H14a5.5 5.5 0 0 1 0 11h-3"/></svg>',
+  share: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M8.5 10.5H7a2 2 0 0 0-2 2V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5.5a2 2 0 0 0-2-2h-1.5"/></svg>',
   sliders: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg>',
 };
 
@@ -58,9 +70,10 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 /**
  * Builds the controls for one pattern inside `root`: a top bar with
- * play/pause, restart, save and a panel toggle; a panel with preset chips,
- * palette swatches and one slider per parameter in the pattern's schema; and
- * a "Save wallpaper" sheet with one button per size.
+ * play/pause, restart, save and a panel toggle; a dock with undo, a big
+ * Randomize button and share; a panel with preset chips, palette swatches and
+ * one slider per parameter in the pattern's schema; and a "Save wallpaper"
+ * sheet with one button per size.
  */
 export function buildControls(
   root: HTMLElement,
@@ -79,6 +92,22 @@ export function buildControls(
   saveBtn.innerHTML = ICONS.save;
   saveBtn.setAttribute('aria-label', 'Save wallpaper');
   saveBtn.setAttribute('aria-controls', 'save-sheet');
+
+  const undoBtn = el('button', { className: 'icon-btn dock-btn', type: 'button', title: 'Undo (Z)' });
+  undoBtn.innerHTML = ICONS.undo;
+  undoBtn.setAttribute('aria-label', 'Undo randomize');
+  const randomBtn = el('button', { className: 'randomize', type: 'button', title: 'Randomize (Space)' });
+  randomBtn.innerHTML = ICONS.dice;
+  randomBtn.append(el('span', {}, ['Randomize']));
+  const shareBtn = el('button', { className: 'icon-btn dock-btn', type: 'button', title: 'Share' });
+  shareBtn.innerHTML = ICONS.share;
+  shareBtn.setAttribute('aria-label', 'Share a link to this pattern');
+  const toastEl = el('p', { className: 'toast' });
+  toastEl.setAttribute('role', 'status');
+  const dock = el('div', { className: 'dock' }, [
+    toastEl,
+    el('div', { className: 'dock-row' }, [undoBtn, randomBtn, shareBtn]),
+  ]);
 
   const bar = el('header', { className: 'bar' }, [
     el('span', { className: 'wordmark' }, ['morpho']),
@@ -150,8 +179,15 @@ export function buildControls(
   panel.setAttribute('aria-label', 'Pattern controls');
 
   let panelOpen = true;
+  // On phones the dock rides on top of the panel and drops down when it hides.
+  const liftDock = () => {
+    const lift = panelOpen ? panel.offsetHeight + 12 : 0;
+    dock.style.setProperty('--lift', `${lift}px`);
+  };
+  new ResizeObserver(liftDock).observe(panel);
   const setPanel = (open: boolean) => {
     panelOpen = open;
+    liftDock();
     panel.classList.toggle('is-hidden', !open);
     panel.inert = !open;
     panelBtn.setAttribute('aria-expanded', String(open));
@@ -206,8 +242,15 @@ export function buildControls(
   playBtn.addEventListener('click', handlers.onTogglePlay);
   restartBtn.addEventListener('click', handlers.onRestart);
   panelBtn.addEventListener('click', () => setPanel(!panelOpen));
+  undoBtn.addEventListener('click', handlers.onUndo);
+  randomBtn.addEventListener('click', handlers.onRandomize);
+  shareBtn.addEventListener('click', handlers.onShare);
 
-  root.append(bar, sheet, panel);
+  root.append(bar, sheet, panel, dock);
+  liftDock();
+
+  let toastTimer = 0;
+  let spins = 0;
 
   const controls: Controls = {
     setValues(next) {
@@ -256,22 +299,37 @@ export function buildControls(
     setPlaying(playing) {
       playBtn.innerHTML = playing ? ICONS.pause : ICONS.play;
       playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-      playBtn.title = playing ? 'Pause' : 'Play';
+      playBtn.title = playing ? 'Pause (P)' : 'Play (P)';
     },
     dismissHint() {
       if (hint.classList.contains('is-gone')) return;
       hint.classList.add('is-gone');
       window.setTimeout(() => (hint.hidden = true), 600);
     },
+    setCanUndo(canUndo) {
+      undoBtn.disabled = !canUndo;
+    },
+    toast(message) {
+      clearTimeout(toastTimer);
+      toastEl.textContent = message;
+      toastEl.classList.add('is-shown');
+      toastTimer = window.setTimeout(() => toastEl.classList.remove('is-shown'), 2200);
+    },
+    spinDice() {
+      spins++;
+      randomBtn.style.setProperty('--spin', `${spins * 180}deg`);
+    },
     destroy() {
       bar.remove();
       sheet.remove();
       panel.remove();
+      dock.remove();
     },
   };
   controls.setValues(values);
   controls.setPalette(palette);
   controls.setPlaying(true);
+  controls.setCanUndo(false);
   return controls;
 }
 

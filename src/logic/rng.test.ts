@@ -48,3 +48,56 @@ describe('makeSeed', () => {
     expect(isValidSeed('x'.repeat(17))).toBe(false);
   });
 });
+
+// Shared links rely on these exact numbers: a link made today must grow the
+// same pattern next year. If one of these changes, old links break.
+describe('stability of shared links', () => {
+  it('mulberry32 matches the reference sequence', () => {
+    const r = mulberry32(42);
+    expect([r(), r(), r()]).toEqual([0.6011037519201636, 0.44829055899754167, 0.8524657934904099]);
+    const z = mulberry32(0);
+    expect([z(), z()]).toEqual([0.26642920868471265, 0.0003297457005828619]);
+  });
+
+  it('hashSeed matches FNV-1a', () => {
+    expect(hashSeed('')).toBe(0x811c9dc5);
+    expect(hashSeed('a')).toBe(0xe40c292c);
+    expect(hashSeed('leopard')).toBe(1359546370);
+    expect(hashSeed('abc123')).toBe(951228933);
+  });
+
+  it('makeSeed is reproducible from a seeded rng', () => {
+    expect(makeSeed(mulberry32(1))).toBe('was98i');
+    expect(makeSeed(mulberry32(2), 10)).toBe('zkjt6wrm3d');
+  });
+});
+
+describe('mulberry32 quality', () => {
+  it('treats seeds as 32-bit unsigned', () => {
+    expect(mulberry32(-1)()).toBe(mulberry32(0xffffffff)());
+    expect(mulberry32(2 ** 32 + 5)()).toBe(mulberry32(5)());
+  });
+
+  it('spreads values evenly', () => {
+    const r = mulberry32(123);
+    const bins = new Array(10).fill(0);
+    const n = 100_000;
+    for (let i = 0; i < n; i++) bins[Math.floor(r() * 10)]++;
+    for (const count of bins) expect(Math.abs(count - n / 10)).toBeLessThan(n / 100);
+  });
+
+  it('gives unrelated sequences for neighbouring seeds', () => {
+    const a = mulberry32(1000);
+    const b = mulberry32(1001);
+    let same = 0;
+    for (let i = 0; i < 1000; i++) if (Math.abs(a() - b()) < 0.01) same++;
+    expect(same).toBeLessThan(50); // ~20 expected by chance
+  });
+});
+
+describe('makeSeed alphabet', () => {
+  it('only uses readable characters (no 0/o, 1/l)', () => {
+    const r = mulberry32(9);
+    for (let i = 0; i < 200; i++) expect(makeSeed(r)).toMatch(/^[a-km-np-z2-9]{6}$/);
+  });
+});

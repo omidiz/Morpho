@@ -1,7 +1,8 @@
 import type { ParamSpec, ParamValues } from '../logic/params';
+import type { ExploreRules } from '../logic/randomize';
 import type { Palette } from '../palettes';
 
-export type { ParamSpec, ParamValues };
+export type { ExploreRules, ParamSpec, ParamValues };
 
 /** A named set of slider values. Keys not listed keep their current value. */
 export interface Preset {
@@ -64,6 +65,11 @@ export interface Pattern {
   /** The UI builds one slider per entry, in this order. */
   params: readonly ParamSpec[];
   presets: readonly Preset[];
+  /**
+   * How "Randomize" varies each parameter, kept to ranges that look good.
+   * Parameters left out keep their current value.
+   */
+  explore: ExploreRules;
   /** Throws UnsupportedError if this device can't run the pattern. */
   create(options: PatternOptions): PatternInstance;
 }
